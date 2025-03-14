@@ -7,6 +7,9 @@
 #define MAX_CONT (10 * 1024 * 1024) /* maximum content length */
 #define MAX_HDR (1024)              /* maximum header length */
 
+#define CRLF "\r\n"
+#define CRLFCRLF "\r\n\r\n"
+
 /* debug trace */
 #ifndef OFFTRACE
 #define TRACE(fmt, msg...) \
