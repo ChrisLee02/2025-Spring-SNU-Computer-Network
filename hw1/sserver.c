@@ -24,6 +24,7 @@ int main(const int argc, const char** argv) {
       i++;
     }
   }
+
   if (port <= 0 || port > 65535) {
     printf("usage: %s -p port\n", argv[0]);
     exit(-1);
@@ -31,4 +32,29 @@ int main(const int argc, const char** argv) {
 
   // implement your own code
   signal(SIGPIPE, SIG_IGN);
+
+  int server_fd, client_fd;
+  struct sockaddr_in saddr;
+
+  if ((server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
+    fprintf(stderr, "socket() failed\n");
+    return EXIT_FAILURE;
+  }
+
+  memset(&saddr, 0, sizeof(saddr));
+  saddr.sin_family = AF_INET;
+  saddr.sin_addr.s_addr = INADDR_ANY;
+  saddr.sin_port = htons(port);
+
+  if (bind(server_fd, (struct sockaddr*)&saddr, sizeof(saddr)) < 0) {
+    fprintf(stderr, "bind() failed\n");
+    close(server_fd);
+    return EXIT_FAILURE;
+  }
+
+  if (listen(server_fd, 1024) < 0) {
+    fprintf(stderr, "listen() failed\n");
+    close(server_fd);
+    return EXIT_FAILURE;
+  }
 }

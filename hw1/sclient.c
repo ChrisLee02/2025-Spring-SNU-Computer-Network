@@ -171,12 +171,12 @@ int main(const int argc, const char** argv) {
     fprintf(stderr, "write failed\n");
     goto error;
   } else if (tot_write_size < req_body_size) {
-    fprintf(stderr, "2connection closed\n");
+    fprintf(stderr, "connection closed\n");
     goto error;
   }
   shutdown(socketfd, SHUT_WR);  // send EOF
 
-  /* logic 6: receive header of response
+  /* logic 6: receive response
 
       SIMPLE/1.0 200 OK\r\n
       Content-length: [byte-count]\r\n
@@ -191,19 +191,10 @@ int main(const int argc, const char** argv) {
     Can assume well-formed response
   */
 
-  /* 의사코드 작성:
-  1. read header + body, EOF까지 쭉 읽는다.
-  2. 읽는 과정에서 CRLFCRLF를 만나면 header 위치를 설정.
-  3. header를 다 읽은 후, content-length를 찾아서 body를 읽는다.
-  4. body를 다 읽은 후, 출력한다.
-  */
-
-  ssize_t res_size;
-
-  res_size = read_all(socketfd, buffer, MAX_HDR + MAX_CONT);
+  ssize_t res_size = read_all(socketfd, buffer, MAX_HDR + MAX_CONT);
 
   if (res_size < 0) {
-    fprintf(stderr, "2read failed\n");
+    fprintf(stderr, "read failed\n");
     goto error;
   } else if (res_size == 0) {
     fprintf(stderr, "connection closed\n");
@@ -218,15 +209,13 @@ int main(const int argc, const char** argv) {
     goto error;
   }
 
-  /* 헤더 첫 줄이 200 인지 400 인지 확인  */
+  /* Parse header, assuming well-formed response */
 
   char* body_start = header_end + 4;
 
   if (strncmp(buffer, "SIMPLE/1.0 200 OK\r\n", 19) == 0) {
-    /* parse header, get content-length and write */
     write_all(STDOUT_FILENO, body_start, res_size - (body_start - buffer));
   } else {
-    // print header
     write_all(STDOUT_FILENO, buffer, res_size);
   }
 
