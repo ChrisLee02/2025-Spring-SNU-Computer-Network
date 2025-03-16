@@ -12,6 +12,51 @@
 #include <unistd.h>
 
 #include "macro.h"
+
+#define CRLF "\r\n"
+#define CRLFCRLF "\r\n\r\n"
+
+#define N_CHILD 5
+
+pid_t child_pids[N_CHILD];
+
+void kill_all_children() {
+  for (int i = 0; i < N_CHILD; i++) {
+    if (child_pids[i] > 0) {
+      printf("killed child %d\n", child_pids[i]);  // for debug
+      kill(child_pids[i], SIGKILL);
+    }
+  }
+}
+
+void sigchld_handler(int signo) {
+  printf("SIGCHLD received\n");
+  kill_all_children();
+}
+void sigint_handler(int signo) {
+  printf("SIGINT received\n");
+  kill_all_children();
+}
+
+void child_loop(int listen_fd) {
+  int client_fd;
+  char* buffer = malloc(MAX_HDR + MAX_CONT + 10);
+
+  if (buffer == NULL) {
+    fprintf(stderr, "malloc failed\n");
+    exit(EXIT_FAILURE);
+  }
+
+  while (1) {
+    if (accept(listen_fd, NULL, NULL) < 0) {
+      fprintf(stderr, "accept() failed\n");
+      free(buffer);
+      exit(EXIT_FAILURE);
+    }
+  }
+  exit(0);
+}
+
 /*--------------------------------------------------------------------------------*/
 int main(const int argc, const char** argv) {
   int i;
@@ -32,6 +77,8 @@ int main(const int argc, const char** argv) {
 
   // implement your own code
   signal(SIGPIPE, SIG_IGN);
+  signal(SIGCHLD, sigchld_handler);
+  signal(SIGINT, sigint_handler);
 
   int server_fd, client_fd;
   struct sockaddr_in saddr;
@@ -57,4 +104,17 @@ int main(const int argc, const char** argv) {
     close(server_fd);
     return EXIT_FAILURE;
   }
+
+  for (i = 0; i < N_CHILD; i++) {
+    if ((child_pids[i] = fork()) == 0) {
+      child_loop(server_fd);
+    }
+  }
+
+  for (i = 0; i < N_CHILD; i++) {
+    waitpid(child_pids[i], NULL, 0);
+  }
+
+  close(server_fd);
+  return EXIT_SUCCESS;
 }

@@ -53,14 +53,7 @@ int main() {
 
   /* 소켓 생성 */
   if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-    perror("socket failed");
-    exit(EXIT_FAILURE);
-  }
-
-  /* 소켓 옵션 설정 */
-  int opt = 1;
-  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-    perror("setsockopt failed");
+    fprintf(stderr, "bad response: no CRLFCRLF\n");
     exit(EXIT_FAILURE);
   }
 

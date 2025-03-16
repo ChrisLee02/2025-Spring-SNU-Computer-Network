@@ -12,6 +12,11 @@
 
 #include "macro.h"
 
+#define CRLF "\r\n"
+#define CRLFCRLF "\r\n\r\n"
+
+#define N_CHILD 5
+
 /* write [total] bytes from buf to fd
    return value may be less than total
    if write() returns 0
