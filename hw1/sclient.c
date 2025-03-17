@@ -150,7 +150,7 @@ int main(const int argc, const char** argv) {
   req_body_size = read_all(STDIN_FILENO, buffer, MAX_CONT);
 
   if (req_body_size < 0) {
-    fprintf(stderr, "read failed\n");
+    fprintf(stderr, "read stdin failed\n");
     goto error;
   }
 
@@ -183,7 +183,7 @@ int main(const int argc, const char** argv) {
   bytes_written = write_all(socketfd, header, req_header_size);
 
   if (bytes_written < 0) {
-    fprintf(stderr, "write failed\n");
+    fprintf(stderr, "write header to server failed\n");
     goto error;
   } else if (bytes_written < req_header_size) {
     fprintf(stderr, "1connection closed\n");
@@ -195,7 +195,7 @@ int main(const int argc, const char** argv) {
   bytes_written = write_all(socketfd, buffer, req_body_size);
 
   if (bytes_written < 0) {
-    fprintf(stderr, "write failed\n");
+    fprintf(stderr, "write body to server failed\n");
     goto error;
   } else if (bytes_written < req_body_size) {
     fprintf(stderr, "connection closed\n");
