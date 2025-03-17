@@ -22,8 +22,8 @@
    if write() returns 0
    return -1 on error
 */
-ssize_t write_all(int fd, const void* buf, size_t total) {
-  size_t bytes_written = 0;
+ssize_t write_all(int fd, const void* buf, ssize_t total) {
+  ssize_t bytes_written = 0;
   while (bytes_written < total) {
     ssize_t res = write(fd, buf + bytes_written, total - bytes_written);
     if (res < 0) {
@@ -41,8 +41,8 @@ ssize_t write_all(int fd, const void* buf, size_t total) {
    if EOF is reached
    return -1 on error
 */
-ssize_t read_all(int fd, void* buf, size_t max_read_size) {
-  size_t bytes_read = 0;
+ssize_t read_all(int fd, void* buf, ssize_t max_read_size) {
+  ssize_t bytes_read = 0;
   while (bytes_read < max_read_size) {
     ssize_t res = read(fd, buf + bytes_read, max_read_size - bytes_read);
     if (res < 0) {
@@ -54,6 +54,18 @@ ssize_t read_all(int fd, void* buf, size_t max_read_size) {
     bytes_read += res;
   }
   return bytes_read;
+}
+
+int parse_response_code(const char* response) {
+  // todo: 임의의 개수의 공백에 대응할 수 있어야함.
+
+  if (strncmp(response, "SIMPLE/1.0 200 OK", 17) == 0) {
+    return 200;
+  } else if (strncmp(response, "SIMPLE/1.0 400 Bad Request", 25) == 0) {
+    return 400;
+  } else {
+    return -1;
+  }
 }
 
 /*--------------------------------------------------------------------------------*/
@@ -168,6 +180,7 @@ int main(const int argc, const char** argv) {
     fprintf(stderr, "1connection closed\n");
     goto error;
   }
+
   /* logic 5: send body */
 
   tot_write_size = write_all(socketfd, buffer, req_body_size);
@@ -218,7 +231,7 @@ int main(const int argc, const char** argv) {
 
   char* body_start = header_end + 4;
 
-  if (strncmp(buffer, "SIMPLE/1.0 200 OK\r\n", 19) == 0) {
+  if (parse_response_code(buffer) == 200) {
     write_all(STDOUT_FILENO, body_start, res_size - (body_start - buffer));
   } else {
     write_all(STDOUT_FILENO, buffer, res_size);
