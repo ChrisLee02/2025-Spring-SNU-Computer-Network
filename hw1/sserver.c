@@ -24,7 +24,6 @@ pid_t child_pids[N_CHILD];
 void kill_all_children() {
   for (int i = 0; i < N_CHILD; i++) {
     if (child_pids[i] > 0) {
-      printf("killed child %d\n", child_pids[i]);  // for debug
       kill(child_pids[i], SIGKILL);
     }
   }
@@ -36,6 +35,7 @@ void sigchld_handler(int signo) {
   printf("SIGCHLD received\n");
   kill_all_children();
 }
+
 void sigint_handler(int signo) {
   printf("SIGINT received\n");
   kill_all_children();
@@ -46,8 +46,8 @@ void sigint_handler(int signo) {
    if write() returns 0
    return -1 on error
 */
-ssize_t write_all(int fd, const void* buf, size_t total) {
-  size_t bytes_written = 0;
+ssize_t write_all(int fd, const char* buf, ssize_t total) {
+  ssize_t bytes_written = 0;
   while (bytes_written < total) {
     ssize_t res = write(fd, buf + bytes_written, total - bytes_written);
     if (res < 0) {
@@ -65,8 +65,8 @@ ssize_t write_all(int fd, const void* buf, size_t total) {
    if EOF is reached
    return -1 on error
 */
-ssize_t read_all(int fd, void* buf, size_t max_read_size) {
-  size_t bytes_read = 0;
+ssize_t read_all(int fd, char* buf, ssize_t max_read_size) {
+  ssize_t bytes_read = 0;
   while (bytes_read < max_read_size) {
     ssize_t res = read(fd, buf + bytes_read, max_read_size - bytes_read);
     if (res < 0) {
@@ -80,10 +80,22 @@ ssize_t read_all(int fd, void* buf, size_t max_read_size) {
   return bytes_read;
 }
 
-/* send response of error code 400  */
-void send_400(int fd) {
+/* send response */
+void send_200(int client_fd, int content_length, const char* body_start) {
+  char* res_header_format = "SIMPLE/1.0 200 OK\r\nContent-length: %d\r\n\r\n";
+  char res_header_buf[MAX_HDR + 10];
+
+  int res_header_size =
+      snprintf(res_header_buf, MAX_HDR, res_header_format, content_length);
+
+  write_all(client_fd, res_header_buf, res_header_size);
+  write_all(client_fd, body_start, content_length);
+}
+
+/* send response of error code 400 */
+void send_400(int cliend_fd) {
   char* response = "SIMPLE/1.0 400 Bad Request\r\n\r\n";
-  write_all(fd, response, strlen(response));
+  write_all(cliend_fd, response, strlen(response));
 }
 
 /* skip space, by moving pointer's position */
@@ -134,7 +146,7 @@ int parse_first_line(const char** p) {
     return 0 on success, -1 on failure
 */
 int parse_host(const char** p) {
-  if (strncasecmp(*p, "Host:", 5) != 0) {
+  if (strncasecmp(*p, "host:", 5) != 0) {
     return -1;
   }
 
@@ -166,7 +178,7 @@ int parse_host(const char** p) {
     return content-length on success, -1 on failure
 */
 int parse_content_length(const char** p) {
-  if (strncasecmp(*p, "Content-Length:", 15) != 0) {
+  if (strncasecmp(*p, "content-length:", 15) != 0) {
     return -1;
   }
 
@@ -195,7 +207,7 @@ int parse_content_length(const char** p) {
 
   *p += 2;
 
-  return content_length;
+  return (int)content_length;
 }
 
 /* parse header, get content_length and save it
@@ -209,8 +221,7 @@ int parse_header(const char* header, int* content_length) {
   }
 
   /*
-    if there're more header than 2, logic should be changed using something
-    like flags.
+    todo(later): if there're more header than 2, logic should be changed
   */
   if (strncasecmp(p, "host:", 5) == 0) {
     if (parse_host(&p) < 0) {
@@ -253,6 +264,8 @@ int parse_header(const char* header, int* content_length) {
 }
 
 void child_loop(int listen_fd) {
+  /* logic 1: set buffer in heap memory (10MB) */
+
   int client_fd;
   char* buffer = malloc(MAX_HDR + MAX_CONT + 10);
 
@@ -262,6 +275,8 @@ void child_loop(int listen_fd) {
   }
 
   while (1) {
+    /* logic 2: accepting client connection and read all request from client */
+
     if ((client_fd = accept(listen_fd, NULL, NULL)) < 0) {
       fprintf(stderr, "accept() failed\n");
       continue;
@@ -279,8 +294,10 @@ void child_loop(int listen_fd) {
       continue;
     }
 
+    /* set null to use string library */
     buffer[req_size] = '\0';
 
+    /* logic 3: parse header and check content-length */
     char* header_end = strstr(buffer, CRLFCRLF);
     if (!header_end) {
       send_400(client_fd);
@@ -308,23 +325,14 @@ void child_loop(int listen_fd) {
       continue;
     }
 
-    char* res_header_format =
-        "SIMPLE/1.0 200 OK\r\ncContent-length: %d\r\n\r\n";
-    char res_header_buf[MAX_HDR + 10];
-    int res_header_size = snprintf(res_header_buf, MAX_HDR + 1,
-                                   res_header_format, content_length);
-    if (res_header_size < 0) {
-      fprintf(stderr, "snprintf failed\n");
-      close(client_fd);
-      continue;
-    }
-
-    write_all(client_fd, res_header_buf, res_header_size);
-    write_all(client_fd, body_start, content_length);
-
+    /* logic 4: format response header and send response header & body*/
+    send_200(client_fd, content_length, body_start);
     close(client_fd);
   }
 
+  // never reach here
+  // buffer will be freed by OS, and as it's only one-time malloc, no need to
+  // free
   exit(0);
 }
 
@@ -347,9 +355,13 @@ int main(const int argc, const char** argv) {
   }
 
   // implement your own code
+
+  /* logic 1: set signal handler for handling child processes.  */
   signal(SIGPIPE, SIG_IGN);
   signal(SIGCHLD, sigchld_handler);
   signal(SIGINT, sigint_handler);
+
+  /* logic 2: open listening server fd */
 
   int server_fd;
   struct sockaddr_in saddr;
@@ -376,12 +388,14 @@ int main(const int argc, const char** argv) {
     return EXIT_FAILURE;
   }
 
+  /* logic 3: fork child processes with child loop logic */
   for (i = 0; i < N_CHILD; i++) {
     if ((child_pids[i] = fork()) == 0) {
       child_loop(server_fd);
     }
   }
 
+  /* logic 4: wait for all children dies and terminate */
   for (i = 0; i < N_CHILD; i++) {
     waitpid(child_pids[i], NULL, 0);
   }

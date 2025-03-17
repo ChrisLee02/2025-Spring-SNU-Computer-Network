@@ -22,7 +22,7 @@
    if write() returns 0
    return -1 on error
 */
-ssize_t write_all(int fd, const void* buf, ssize_t total) {
+ssize_t write_all(int fd, const char* buf, ssize_t total) {
   ssize_t bytes_written = 0;
   while (bytes_written < total) {
     ssize_t res = write(fd, buf + bytes_written, total - bytes_written);
@@ -41,7 +41,7 @@ ssize_t write_all(int fd, const void* buf, ssize_t total) {
    if EOF is reached
    return -1 on error
 */
-ssize_t read_all(int fd, void* buf, ssize_t max_read_size) {
+ssize_t read_all(int fd, char* buf, ssize_t max_read_size) {
   ssize_t bytes_read = 0;
   while (bytes_read < max_read_size) {
     ssize_t res = read(fd, buf + bytes_read, max_read_size - bytes_read);
@@ -56,12 +56,21 @@ ssize_t read_all(int fd, void* buf, ssize_t max_read_size) {
   return bytes_read;
 }
 
-int parse_response_code(const char* response) {
-  // todo: 임의의 개수의 공백에 대응할 수 있어야함.
+/* skip space, by moving pointer's position */
+void skip_blank(const char** p) {
+  while (isblank(**p)) {
+    (*p)++;
+  }
+}
 
-  if (strncmp(response, "SIMPLE/1.0 200 OK", 17) == 0) {
+int parse_response_code(const char* response) {
+  const char* p = response;
+  p += 10;  // skip "SIMPLE/1.0"
+  skip_blank(&p);
+
+  if (strncmp(p, "200", 3) == 0) {
     return 200;
-  } else if (strncmp(response, "SIMPLE/1.0 400 Bad Request", 25) == 0) {
+  } else if (strncmp(p, "400", 3) == 0) {
     return 400;
   } else {
     return -1;
@@ -130,7 +139,7 @@ int main(const int argc, const char** argv) {
 
   /* logic 2: Read from Standard input */
 
-  ssize_t req_body_size, req_header_size, tot_write_size;
+  ssize_t req_body_size, req_header_size, bytes_written;
 
   buffer = malloc(MAX_HDR + MAX_CONT + 10);
   if (!buffer) {
@@ -171,24 +180,24 @@ int main(const int argc, const char** argv) {
 
   /* logic 4: send header */
 
-  tot_write_size = write_all(socketfd, header, req_header_size);
+  bytes_written = write_all(socketfd, header, req_header_size);
 
-  if (tot_write_size < 0) {
+  if (bytes_written < 0) {
     fprintf(stderr, "write failed\n");
     goto error;
-  } else if (tot_write_size < req_header_size) {
+  } else if (bytes_written < req_header_size) {
     fprintf(stderr, "1connection closed\n");
     goto error;
   }
 
   /* logic 5: send body */
 
-  tot_write_size = write_all(socketfd, buffer, req_body_size);
+  bytes_written = write_all(socketfd, buffer, req_body_size);
 
-  if (tot_write_size < 0) {
+  if (bytes_written < 0) {
     fprintf(stderr, "write failed\n");
     goto error;
-  } else if (tot_write_size < req_body_size) {
+  } else if (bytes_written < req_body_size) {
     fprintf(stderr, "connection closed\n");
     goto error;
   }
@@ -196,15 +205,15 @@ int main(const int argc, const char** argv) {
 
   /* logic 6: receive response
 
-      SIMPLE/1.0 200 OK\r\n
-      Content-length: [byte-count]\r\n
-      \r\n
-      [message-content]
+    SIMPLE/1.0 200 OK\r\n
+    Content-length: [byte-count]\r\n
+    \r\n
+    [message-content]
 
       or
 
     SIMPLE/1.0 400 Bad Request\r\n
-      \r\n
+    \r\n
 
     Can assume well-formed response
   */
