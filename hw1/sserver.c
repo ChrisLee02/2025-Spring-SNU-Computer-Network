@@ -16,7 +16,7 @@
 #define CRLF "\r\n"
 #define CRLFCRLF "\r\n\r\n"
 
-#define N_CHILD 5
+#define N_CHILD 6
 
 pid_t child_pids[N_CHILD];
 
@@ -32,12 +32,12 @@ void kill_all_children() {
 /* If any child is terminated or interupt received, kill remaining children and
   terminate parent. */
 void sigchld_handler(int signo) {
-  printf("SIGCHLD received\n");
+  // printf("SIGCHLD received\n");
   kill_all_children();
 }
 
 void sigint_handler(int signo) {
-  printf("SIGINT received\n");
+  // printf("SIGINT received\n");
   kill_all_children();
 }
 
@@ -82,7 +82,7 @@ ssize_t read_all(int fd, char* buf, ssize_t max_read_size) {
 
 /* send response */
 void send_200(int client_fd, int content_length, const char* body_start) {
-  char* res_header_format = "SIMPLE/1.0 200 OK\r\nContent-length: %d\r\n\r\n";
+  char* res_header_format = "SIMPLE/1.0 200 OK\r\nContent-Length: %d\r\n\r\n";
   char res_header_buf[MAX_HDR + 10];
 
   int res_header_size =
@@ -398,6 +398,7 @@ int main(const int argc, const char** argv) {
   /* logic 4: wait for all children dies and terminate */
   for (i = 0; i < N_CHILD; i++) {
     waitpid(child_pids[i], NULL, 0);
+    // printf("child %d terminated\n", child_pids[i]);
   }
 
   close(server_fd);

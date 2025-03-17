@@ -164,7 +164,7 @@ int main(const int argc, const char** argv) {
   req_header_size = snprintf(header, MAX_HDR,
                              "POST message SIMPLE/1.0\r\n"
                              "Host: %s\r\n"
-                             "Content-length: %ld\r\n"
+                             "Content-Length: %ld\r\n"
                              "\r\n",
                              pserver, req_body_size);
 
@@ -186,7 +186,7 @@ int main(const int argc, const char** argv) {
     fprintf(stderr, "write header to server failed\n");
     goto error;
   } else if (bytes_written < req_header_size) {
-    fprintf(stderr, "1connection closed\n");
+    fprintf(stderr, "connection closed\n");
     goto error;
   }
 
@@ -221,7 +221,7 @@ int main(const int argc, const char** argv) {
   ssize_t res_size = read_all(socketfd, buffer, MAX_HDR + MAX_CONT);
 
   if (res_size < 0) {
-    fprintf(stderr, "read failed\n");
+    fprintf(stderr, "read from server failed\n");
     goto error;
   } else if (res_size == 0) {
     fprintf(stderr, "connection closed\n");
