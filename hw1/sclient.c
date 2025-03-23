@@ -63,7 +63,7 @@ void skip_blank(const char** p) {
 
 int parse_response_code(const char* response) {
   const char* p = response;
-  p += 10;  // skip "SIMPLE/1.0"
+  p += strlen("SIMPLE/1.0");  // skip "SIMPLE/1.0"
   skip_blank(&p);
 
   if (strncmp(p, "200", 3) == 0) {
@@ -199,7 +199,8 @@ int main(const int argc, const char** argv) {
     fprintf(stderr, "connection closed\n");
     goto error;
   }
-  shutdown(socketfd, SHUT_WR);  // send EOF
+
+  // shutdown(socketfd, SHUT_WR);  // send EOF
 
   /* logic 6: receive response
 

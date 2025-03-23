@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
       close(sockfd);
       continue;
     }
-    shutdown(sockfd, SHUT_WR);
+    // shutdown(sockfd, SHUT_WR);
     char resp[MAX_BUF];
     ssize_t resp_len = read_all(sockfd, resp, sizeof(resp) - 1);
     if (resp_len < 0) {

@@ -141,7 +141,7 @@ void client_task(const char* server, int port, int client_no) {
     free(body);
     exit(EXIT_FAILURE);
   }
-  shutdown(socketfd, SHUT_WR);
+  // shutdown(socketfd, SHUT_WR);
 
   /* Allocate buffer for response */
   buffer = malloc(MAX_HDR + MAX_CONT + 10);
