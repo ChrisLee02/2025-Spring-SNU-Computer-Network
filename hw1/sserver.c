@@ -80,6 +80,29 @@ ssize_t read_all(int fd, char* buf, ssize_t max_read_size) {
   return bytes_read;
 }
 
+/* read from fd to buf until CRLFCRLF is found
+   return value may be less than max_read_size
+   if EOF is reached
+   return -1 on error
+*/
+ssize_t read_until_header(int fd, char* buf, ssize_t max_header_size) {
+  ssize_t bytes_read = 0;
+  while (bytes_read < max_header_size) {
+    ssize_t res = read(fd, buf + bytes_read, max_header_size - bytes_read);
+    if (res < 0) {
+      return res;
+    }
+    if (res == 0) {
+      break;
+    }
+    bytes_read += res;
+    if (strstr(buf, CRLFCRLF) != NULL) {
+      break;
+    }
+  }
+  return bytes_read;
+}
+
 /* send response */
 void send_200(int client_fd, int content_length, const char* body_start) {
   char* res_header_format = "SIMPLE/1.0 200 OK\r\nContent-Length: %d\r\n\r\n";
@@ -222,42 +245,40 @@ int parse_header(const char* header, int* content_length) {
 
   /*
     todo(later): if there're more header than 2, logic should be changed
+    todo: 고쳐야됨. 임의 개수의 헤더가 있을 수 있는데, 걔네들은 그냥 다음줄로
+    보내버리면 됨.
+    todo: while루프 돌리면서 host:랑 content-length: 플래그가
+    성립될 때까지 돌리면 됨.
+
+
+
   */
-  if (strncasecmp(p, "host:", 5) == 0) {
-    if (parse_host(&p) < 0) {
-      return -1;
+  int host_parsed = 0;
+  int content_length_parsed = 0;
+
+  while (1) {
+    if (strncasecmp(p, "host:", 5) == 0) {
+      if (parse_host(&p) < 0) {
+        return -1;
+      }
+      host_parsed = 1;
+    } else if (strncasecmp(p, "content-length:", 15) == 0) {
+      *content_length = parse_content_length(&p);
+
+      if (*content_length < 0 || *content_length > MAX_CONT) {
+        return -1;
+      }
+      content_length_parsed = 1;
+    } else {
+      p = strstr(p, CRLF) + 2;
     }
 
-    *content_length = parse_content_length(&p);
-
-    if (*content_length < 0) {
-      return -1;
+    if (strncasecmp(p, CRLF, 2) == 0) {
+      break;
     }
+  }
 
-    // check whether there is no more header
-    if (strncmp(p, CRLF, 2) != 0) {
-      return -1;
-    }
-
-    p += 2;
-
-  } else if (strncasecmp(p, "content-length:", 15) == 0) {
-    *content_length = parse_content_length(&p);
-
-    if (*content_length < 0) {
-      return -1;
-    }
-
-    if (parse_host(&p) < 0) {
-      return -1;
-    }
-
-    // check whether there is no more header
-    if (strncmp(p, CRLF, 2) != 0) {
-      return -1;
-    }
-
-  } else {
+  if (!host_parsed || !content_length_parsed) {
     return -1;
   }
   return 0;
@@ -282,31 +303,37 @@ void child_loop(int listen_fd) {
       continue;
     }
 
-    ssize_t req_size = read_all(client_fd, buffer, MAX_HDR + MAX_CONT);
+    // sleep(3); for testing concurrency
 
-    if (req_size < 0) {
+    /* logic 3: read until CRLFCRLF found */
+
+    ssize_t req_first_size = read_until_header(client_fd, buffer, MAX_HDR);
+
+    if (req_first_size < 0) {
       fprintf(stderr, "read failed\n");
       close(client_fd);
       continue;
-    } else if (req_size == 0) {
+    } else if (req_first_size == 0) {
       fprintf(stderr, "connection closed\n");
       close(client_fd);
       continue;
     }
 
     /* set null to use string library */
-    buffer[req_size] = '\0';
+    buffer[req_first_size] = '\0';
 
-    /* logic 3: parse header and check content-length */
+    /* logic 3: parse header and get content-length */
     char* header_end = strstr(buffer, CRLFCRLF);
     if (!header_end) {
+      // if CRLFCRLF is not found until MAX_HDR bytes, then
+      // header size over, 400 error
       send_400(client_fd);
       close(client_fd);
       continue;
     }
 
     char* body_start = header_end + 4;
-    int body_size = req_size - (body_start - buffer);
+    int already_read_body_size = req_first_size - (body_start - buffer);
 
     int content_length;
 
@@ -316,16 +343,24 @@ void child_loop(int listen_fd) {
       continue;
     }
 
-    /* if body size is less than content_length, server should suppose that
-       there's a loss of data. thus send 400 error
-    */
-    if (body_size < content_length) {
-      send_400(client_fd);
+    /* logic 5: if additional body remained to be read, read it */
+
+    int to_be_read_body_size = content_length - already_read_body_size;
+
+    ssize_t req_second_size = read_all(
+        client_fd, body_start + already_read_body_size, to_be_read_body_size);
+
+    if (req_second_size < 0) {
+      fprintf(stderr, "read failed\n");
+      close(client_fd);
+      continue;
+    } else if (req_second_size < to_be_read_body_size) {
+      fprintf(stderr, "connection closed\n");
       close(client_fd);
       continue;
     }
 
-    /* logic 4: format response header and send response header & body*/
+    /* logic 6: format response header and send response header & body*/
     send_200(client_fd, content_length, body_start);
     close(client_fd);
   }

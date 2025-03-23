@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 #define CRLF "\r\n"
-#define MAX_BUF (1024 * 1024)
+#define MAX_BUF (10 * 1024)
 
 ssize_t write_all(int fd, const char *buf, size_t total) {
   size_t bytes_written = 0;
@@ -68,8 +68,10 @@ int main(int argc, char **argv) {
   const char *body = "Hello Test";
   int body_len = strlen(body);
 
+  printf("hi\n");
+
 // 여러 테스트 케이스 준비 (올바른 요청과 에러 요청 포함)
-#define NUM_TESTS 6
+#define NUM_TESTS 7
   struct TestCase tests[NUM_TESTS];
 
   // Test 0: 올바른 요청, 표준 헤더 순서 (Host 후 Content-length)
@@ -120,7 +122,7 @@ int main(int argc, char **argv) {
           "%s",
           body);
 
-  // Test 5: 잘못된 요청, 선언된 Content-length보다 본문 길이가 짧음
+  // Test 5: 올바른 요청, 선언된 Content-length보다 본문 길이가 김. 짤린다.
   tests[5].description =
       "Invalid request: body length less than declared Content-length";
   sprintf(tests[5].request,
@@ -129,7 +131,19 @@ int main(int argc, char **argv) {
           "Content-length: %d\r\n"
           "\r\n"
           "%s",
-          body_len + 5, body);
+          body_len - 1, body);
+
+  tests[6].description = "Valid request with extra undefined headers";
+  sprintf(tests[6].request,
+          "POST message SIMPLE/1.0\r\n"
+          "blahdjkd: dfjdjkf \r\n"
+          "Host: localhost \r\n"
+          "blahdjkd: dfjdjkf \r\n"
+          "Content-length: %d\r\n"
+          "blahdjkd: dfjdjkf \r\n"
+          "\r\n"
+          "%s",
+          body_len, body);
 
   // 각 테스트 케이스마다 소켓 생성, 요청 전송, 응답 수신 후 출력
   for (int i = 0; i < NUM_TESTS; i++) {
