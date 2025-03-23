@@ -96,8 +96,8 @@ int main(int argc, char **argv) {
   tests[2].description = "Valid request with extra spaces";
   sprintf(tests[2].request,
           "POST    message    SIMPLE/1.0\r\n"
-          "   Host:    localhost   \r\n"
-          "   Content-length:    %d   \r\n"
+          "Host:    localhost   \r\n"
+          "Content-length:    %d   \r\n"
           "\r\n"
           "%s",
           body_len, body);
