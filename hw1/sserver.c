@@ -243,16 +243,6 @@ int parse_header(const char* header, int* content_length) {
     return -1;
   }
 
-  /*
-    todo(later): if there're more header than 2, logic should be changed
-    todo: 고쳐야됨. 임의 개수의 헤더가 있을 수 있는데, 걔네들은 그냥 다음줄로
-    보내버리면 됨.
-    todo: while루프 돌리면서 host:랑 content-length: 플래그가
-    성립될 때까지 돌리면 됨.
-
-
-
-  */
   int host_parsed = 0;
   int content_length_parsed = 0;
 
