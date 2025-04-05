@@ -26,7 +26,7 @@
 
 #define CRLF "\r\n"
 #define CRLFCRLF "\r\n\r\n"
-#define NUM_CONCURRENT 5
+#define NUM_CONCURRENT 15
 
 /* write_all: writes total bytes from buf to fd */
 ssize_t write_all(int fd, const char* buf, ssize_t total) {

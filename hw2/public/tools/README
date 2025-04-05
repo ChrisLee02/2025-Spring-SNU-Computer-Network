@@ -1,0 +1,129 @@
+Flexiclient is a suite of HTTP GET requests generator, which consists
+of two main components: the workload generators (single, zipfgen,
+dyngen) and the client core (flexiclient). In typical usage, UNIX pipe
+could be used to form a particular generator-core combination.
+
+=====================  Steps to run Flexiclient =====================
+
+(1) Build Executable
+    Simply type 
+
+        make
+
+    should be able to make all of the executable. 
+
+    (Flexiclient uses two port (7979 and 7980). Change them in
+Makefile in case they may cause conflicts.
+     Uncomment LIBS if you are working on Solaris. )
+
+(2) Generate File Set
+    copy fileset to your server's document directory. Then run:
+
+    ./fileset -s SETTYPE -n #DIRS
+
+    (The smallest unit of file set is direcotry. Each directory
+consists of 36 files and is about 4.88MB. For more information, please
+see http://www.spec.org/osg/web99/docs/whitepaper.html)
+
+(3) Select Workload
+    We provide four workload generators: single, zipfgen, dyngen, and peers
+
+    "single" prints out the input string
+
+    "zipfgen" generates SPECWeb99-like static requests in the format of:
+              /file_set/dirXXXXX/classY_Z
+
+    "dyngen" generates both static and dynamic requests in the format of:
+              /file_set/dirXXXXX/classY_Z
+              /fcgi-bin/specweb99-fcgi.fcgi?/file_set/dirXXXXX/classY_Z
+
+    "peers" generates static requests in random order
+
+    (For arguments of generators, please see "Workload Generator"
+section at the end of this file.
+     For more information about SPECWeb99 like workload, please see
+http://www.spec.org/osg/web99/docs/whitepaper.html)
+
+(4) Run Test
+    One or more client machines could be used in a test. 
+
+
+*****************
+* single client *
+*****************
+
+Example:
+./single /rootdir/file001.html | ./flexiclient -host SERVER_NAME -port SERVER_PORT -time X_SECONDS
+./zipfgen -s spec -n 100 | ./flexiclient -host SERVER_NAME -port SERVER_PORT -time X_SECONDS
+
+
+*********
+* files *
+*********
+
+flexiclient.c: 
+When started, flexiclient will listen on port 7979 and wait for the trigger signal from clienmaster. Flexiclient may work as daemon on the client machines. To run a test with multiple client machines, run flexiclient on each of these machines.
+
+usage: ./flexiclient
+
+clientmaster.c: 
+send starting signal trigger for client(s), get results back from clients and write to output file
+if no file specified as input, then it will try to read data from stdin
+
+usage: ./clientmaster [*.conf]
+
+fileset.c
+fileset generates the target files in SPECWeb99 format. i.e. by default: file_set/dir%d/class{0-4}_{0-8}, with file size from 102 bytes (class0_0) to 921600 (class3_8)
+
+Usage: ./fileset -n #dirs
+Note: the dir number is like dir0, dir1, ... but not dir00000, dir00001 in SpecWeb99
+      the "-n" argument it takes is dir numbers instead of connections numbers
+
+-------------------
+workload generators
+-------------------
+
+single.c:
+---------
+fixed request workload generator
+single prints out requests which are identical with the formatstring  
+
+usage: ./single formatstring
+
+
+peers.c: 
+--------
+even distribution (random) workload generator
+
+usage: ./peers formatstring num-choices max-rangeN-1 ... max-range1 max-range0
+
+  formatstring is something like file%d.html or dir%d/file%d.html
+
+  let's say we have a 3-level hierarchy, where the lowest level
+  has 25 files per directory, the middle level has 10 subdirectories,
+  and the highest level has as many directories as needed.
+
+  If we want 2010 files total, we could specify
+
+  dir%d/subdir%d/file%d.html 2010 10 25
+
+  possible combinations generated would be
+  dir{0-8}/subdir{0-9}/file{0-24}.html and dir9/subdir0/file{0-9}.html
+
+
+zipfgen.c:
+----------
+zipf like distribution requests generator
+
+The current output complies with the dataset in Specweb99, i.e.: 
+             the output format is /dir%d/class%d_%d     
+  dirs and files are zipf distribution, classes have fixed distribution 
+  class0: 0.35, class1: 0.50, class2: 0.14, class3: 0.01      
+
+usage: ./zipfgen dirSize [alpha] (alpha default: 1)    
+
+
+
+
+
+
