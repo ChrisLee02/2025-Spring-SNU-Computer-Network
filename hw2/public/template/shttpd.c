@@ -22,6 +22,10 @@
 #define CRLF "\r\n"
 #define CRLFCRLF "\r\n\r\n"
 
+// ============================================================
+// === HTTP Parser Functions ===
+// ============================================================
+
 // enum for code
 // ok, 400, 403, 404
 typedef enum {
@@ -42,102 +46,15 @@ typedef struct {
   connection keep_alive;
 } http_request;
 
-typedef struct {
-  int fd;
-  char read_buffer[MAX_HDR];
-  size_t read_len;
-  http_request request;
-
-  int file_fd;
-  off_t file_offset;
-  size_t file_remain;
-
-  write_state write_phase;
-
-  char header_buf[MAX_HDR];
-  size_t header_len;
-  size_t header_sent;
-} connection_context;
-
-static const char* g_rootDir = "./"; /* root directory */
-const char* errMessage400 =
-    "HTTP/1.0 400 Bad Request\r\n"
-    "Connection: close\r\n"
-    "\r\n";
-
-const char* errMessage403 =
-    "HTTP/1.0 403 Forbidden\r\n"
-    "Connection: close\r\n"
-    "\r\n";
-
-const char* errMessage404 =
-    "HTTP/1.0 404 Not Found\r\n"
-    "Connection: close\r\n"
-    "\r\n";
-
-const char* errMessage500 =
-    "HTTP/1.0 500 Internal Server Error"
-    "\r\nConnection: close\r\n"
-    "\r\n";
-
-volatile sig_atomic_t stop_server = 0;
-
-/*--------------------------------------------------------------------------------*/
-static void PrintUsage(const char* prog) {
-  printf("usage: %s -p port -d rootDirectory(optional) \n", prog);
-}
-
-int set_nonblocking(int sockfd) {
-  int flags = fcntl(sockfd, F_GETFL, 0);  // get default flags
-  if (flags == -1) return -1;
-  return fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);  // set as non-blocking
-}
-
-connection_context* create_connection_context(int fd) {
-  connection_context* ctx = malloc(sizeof(connection_context));
-  if (!ctx) {
-    fprintf(stderr, "malloc failed in create_connection_context\n");
-    return NULL;
-  }
-
-  memset(ctx, 0, sizeof(connection_context));
-  ctx->fd = fd;
-  ctx->file_fd = -1;
-  return ctx;
-}
-
-void close_connection(connection_context* ctx, int epoll_fd) {
-  epoll_ctl(epoll_fd, EPOLL_CTL_DEL, ctx->fd, NULL);
-  close(ctx->fd);
-  if (ctx->file_fd >= 0) close(ctx->file_fd);
-  free(ctx);
-}
-
-void reset_context(connection_context* ctx) {
-  // reset the context except for fd and keep_alive
-  memset(&ctx->request, 0, sizeof(http_request));
-  memset(ctx->read_buffer, 0, MAX_HDR);
-  memset(ctx->header_buf, 0, MAX_HDR);
-  ctx->read_len = 0;
-  if (ctx->file_fd >= 0) close(ctx->file_fd);
-  ctx->file_fd = -1;
-  ctx->file_offset = 0;
-  ctx->file_remain = 0;
-  ctx->write_phase = RESP_WRITING_HEADER;
-  ctx->header_len = 0;
-  ctx->header_sent = 0;
-}
-
-/* skip space, by moving pointer's position */
+/* Skip spaces by moving the pointer's position */
 void skip_blank(const char** p) {
   while (isblank(**p)) {
     (*p)++;
   }
 }
 
-/* parse first line of header, which is case-sensitive
-    return 0 on success, -1 on failure
-*/
+/* Parse first line of header, which is case-sensitive.
+   Return 0 on success, -1 on failure. */
 int parse_first_line(const char** p, http_request* req) {
   if (strncmp(*p, "GET", 3) != 0) {
     return -1;
@@ -180,9 +97,8 @@ int parse_first_line(const char** p, http_request* req) {
   return 0;
 }
 
-/* parse one line of header, suppose it is host header
-    return 0 on success, -1 on failure
-*/
+/* Parse one line of header, suppose it is host header.
+   Return 0 on success, -1 on failure. */
 int parse_host(const char** p) {
   if (strncasecmp(*p, "host:", 5) != 0) {
     return -1;
@@ -212,6 +128,8 @@ int parse_host(const char** p) {
   return 0;
 }
 
+/* Parse connection header.
+   Return 0 on success, -1 on failure. */
 int parse_connection(const char** p, http_request* req) {
   if (strncasecmp(*p, "connection:", 11) != 0) {
     return -1;
@@ -242,9 +160,8 @@ int parse_connection(const char** p, http_request* req) {
   return 0;
 }
 
-/* parse header, get data and save it
-   return OK on success, BAD_REQUEST on failure
-*/
+/* Parse header, get data and save it.
+   Return OK on success, BAD_REQUEST on failure. */
 res_code parse_request(const char* header_buf, http_request* req) {
   const char* p = header_buf;
   if (parse_first_line(&p, req) < 0) {
@@ -267,7 +184,6 @@ res_code parse_request(const char* header_buf, http_request* req) {
       if (strstr(p, CRLF) == NULL) {
         return BAD_REQUEST;
       }
-
       p = strstr(p, CRLF) + 2;
     }
     if (strncmp(p, CRLF, 2) == 0) {
@@ -280,6 +196,88 @@ res_code parse_request(const char* header_buf, http_request* req) {
   }
   return OK;
 }
+
+// ============================================================
+// === Connection Management Functions ===
+// ============================================================
+
+typedef struct {
+  int fd;
+  char read_buffer[MAX_HDR];
+  size_t read_len;
+  http_request request;
+
+  int file_fd;
+  off_t file_offset;
+  size_t file_remain;
+
+  write_state write_phase;
+
+  char header_buf[MAX_HDR];
+  size_t header_len;
+  size_t header_sent;
+} connection_context;
+
+static const char* g_rootDir = "./"; /* root directory */
+
+connection_context* create_connection_context(int fd) {
+  connection_context* ctx = malloc(sizeof(connection_context));
+  if (!ctx) {
+    fprintf(stderr, "malloc failed in create_connection_context\n");
+    return NULL;
+  }
+
+  memset(ctx, 0, sizeof(connection_context));
+  ctx->fd = fd;
+  ctx->file_fd = -1;
+  return ctx;
+}
+
+void reset_context(connection_context* ctx) {
+  // reset the context except for fd and keep_alive
+  memset(&ctx->request, 0, sizeof(http_request));
+  memset(ctx->read_buffer, 0, MAX_HDR);
+  memset(ctx->header_buf, 0, MAX_HDR);
+  ctx->read_len = 0;
+  if (ctx->file_fd >= 0) close(ctx->file_fd);
+  ctx->file_fd = -1;
+  ctx->file_offset = 0;
+  ctx->file_remain = 0;
+  ctx->write_phase = RESP_WRITING_HEADER;
+  ctx->header_len = 0;
+  ctx->header_sent = 0;
+}
+
+void close_connection(connection_context* ctx, int epoll_fd) {
+  epoll_ctl(epoll_fd, EPOLL_CTL_DEL, ctx->fd, NULL);
+  close(ctx->fd);
+  if (ctx->file_fd >= 0) close(ctx->file_fd);
+  free(ctx);
+}
+
+// ============================================================
+// === Response Handling Functions ===
+// ============================================================
+
+const char* errMessage400 =
+    "HTTP/1.0 400 Bad Request\r\n"
+    "Connection: close\r\n"
+    "\r\n";
+
+const char* errMessage403 =
+    "HTTP/1.0 403 Forbidden\r\n"
+    "Connection: close\r\n"
+    "\r\n";
+
+const char* errMessage404 =
+    "HTTP/1.0 404 Not Found\r\n"
+    "Connection: close\r\n"
+    "\r\n";
+
+const char* errMessage500 =
+    "HTTP/1.0 500 Internal Server Error"
+    "\r\nConnection: close\r\n"
+    "\r\n";
 
 void send_error(connection_context* ctx, res_code err_code, int epoll_fd) {
   const char* msg;
@@ -360,6 +358,10 @@ res_code prepare_response(connection_context* ctx) {
   return OK;
 }
 
+// ============================================================
+// === Epoll Event Handling Functions ===
+// ============================================================
+
 void handle_new_connection(int listen_fd, int epoll_fd) {
   int client_fd = accept(listen_fd, NULL, NULL);
   if (client_fd < 0) {
@@ -434,6 +436,7 @@ void handle_epollin(connection_context* ctx, int epoll_fd) {
   }
 }
 
+/* Handle EPOLLOUT events by sending header and body */
 void handle_epollout(connection_context* ctx, int epoll_fd) {
   if (ctx->write_phase == RESP_WRITING_HEADER) {
     while (ctx->header_sent < ctx->header_len) {
@@ -467,7 +470,7 @@ void handle_epollout(connection_context* ctx, int epoll_fd) {
       ctx->file_remain -= sent;
     }
 
-    // here, when body is sent completely
+    // When body is sent completely
     if (ctx->request.keep_alive == KEEP_ALIVE) {
       reset_context(ctx);
       struct epoll_event ev = {.events = EPOLLIN | EPOLLET, .data.ptr = ctx};
@@ -481,7 +484,20 @@ void handle_epollout(connection_context* ctx, int epoll_fd) {
   }
 }
 
-/*--------------------------------------------------------------------------------*/
+// ============================================================
+// === Main Function and Initialization ===
+// ============================================================
+
+static void PrintUsage(const char* prog) {
+  printf("usage: %s -p port -d rootDirectory(optional) \n", prog);
+}
+
+int set_nonblocking(int sockfd) {
+  int flags = fcntl(sockfd, F_GETFL, 0);  // get default flags
+  if (flags == -1) return -1;
+  return fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);  // set as non-blocking
+}
+
 int main(const int argc, const char** argv) {
   int i;
   int port = -1;
