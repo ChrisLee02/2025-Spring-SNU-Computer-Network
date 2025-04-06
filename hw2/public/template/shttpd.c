@@ -23,6 +23,20 @@
 #define CRLFCRLF "\r\n\r\n"
 
 // ============================================================
+// === Utility functions ===
+// ============================================================
+
+static void PrintUsage(const char* prog) {
+  printf("usage: %s -p port -d rootDirectory(optional) \n", prog);
+}
+
+int set_nonblocking(int sockfd) {
+  int flags = fcntl(sockfd, F_GETFL, 0);  // get default flags
+  if (flags == -1) return -1;
+  return fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);  // set as non-blocking
+}
+
+// ============================================================
 // === HTTP Parser Functions ===
 // ============================================================
 
@@ -436,38 +450,53 @@ void handle_epollin(connection_context* ctx, int epoll_fd) {
   }
 }
 
+int send_header(connection_context* ctx, int epoll_fd) {
+  while (ctx->header_sent < ctx->header_len) {
+    ssize_t sent = write(ctx->fd, ctx->header_buf + ctx->header_sent,
+                         ctx->header_len - ctx->header_sent);
+    if (sent < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return -1;
+      }
+      fprintf(stderr, "write error for sending header\n");
+      close_connection(ctx, epoll_fd);
+      return -1;
+    }
+    ctx->header_sent += sent;
+  }
+  return 0;
+}
+
+int send_body(connection_context* ctx, int epoll_fd) {
+  while (ctx->file_remain > 0) {
+    ssize_t sent =
+        sendfile(ctx->fd, ctx->file_fd, &ctx->file_offset, ctx->file_remain);
+    if (sent < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        return -1;
+      }
+      fprintf(stderr, "sendfile error for sending body\n");
+
+      close_connection(ctx, epoll_fd);
+      return -1;
+    }
+    ctx->file_remain -= sent;
+  }
+  return 1;  // 바디 전송 완료
+}
+
 /* Handle EPOLLOUT events by sending header and body */
 void handle_epollout(connection_context* ctx, int epoll_fd) {
   if (ctx->write_phase == RESP_WRITING_HEADER) {
-    while (ctx->header_sent < ctx->header_len) {
-      ssize_t sent = write(ctx->fd, ctx->header_buf + ctx->header_sent,
-                           ctx->header_len - ctx->header_sent);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          return;
-        }
-        fprintf(stderr, "write error (header)\n");
-        close_connection(ctx, epoll_fd);
-        return;
-      }
-      ctx->header_sent += sent;
+    if (send_header(ctx, epoll_fd) < 0) {
+      return;
     }
     ctx->write_phase = RESP_WRITING_BODY;
   }
 
   if (ctx->write_phase == RESP_WRITING_BODY) {
-    while (ctx->file_remain > 0) {
-      ssize_t sent =
-          sendfile(ctx->fd, ctx->file_fd, &ctx->file_offset, ctx->file_remain);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          return;
-        }
-        fprintf(stderr, "sendfile error (body)\n");
-        close_connection(ctx, epoll_fd);
-        return;
-      }
-      ctx->file_remain -= sent;
+    if (send_body(ctx, epoll_fd) < 0) {
+      return;
     }
 
     // When body is sent completely
@@ -485,18 +514,8 @@ void handle_epollout(connection_context* ctx, int epoll_fd) {
 }
 
 // ============================================================
-// === Main Function and Initialization ===
+// === Main Function ===
 // ============================================================
-
-static void PrintUsage(const char* prog) {
-  printf("usage: %s -p port -d rootDirectory(optional) \n", prog);
-}
-
-int set_nonblocking(int sockfd) {
-  int flags = fcntl(sockfd, F_GETFL, 0);  // get default flags
-  if (flags == -1) return -1;
-  return fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);  // set as non-blocking
-}
 
 int main(const int argc, const char** argv) {
   int i;
