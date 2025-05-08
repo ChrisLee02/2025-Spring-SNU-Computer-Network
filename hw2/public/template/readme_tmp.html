@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>readme.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="readme-project-2-%E2%80%93-building-a-simple-web-server">README: Project 2 – Building a Simple Web Server</h1>
+<p><strong>Student ID:</strong> 2021-18641<br>
+<strong>Name:</strong> Hadong Lee</p>
+<hr>
+<h2 id="1-implementation-strategy">1. Implementation Strategy</h2>
+<p>This project implements a simple web server using non-blocking I/O and the epoll event loop. The code is organized into several modules, each clearly marked with comments in the source code. Below is an overview of the roles and functions of each module:</p>
+<h3 id="11-http-parser">1.1 HTTP Parser</h3>
+<p>This module is responsible for parsing incoming HTTP requests. It includes functions such as:</p>
+<ul>
+<li><strong><code>parse_first_line</code></strong>: Validates the initial request line, extracts the HTTP method, URL, and version, and determines the connection type (keep-alive or close).</li>
+<li><strong><code>parse_host</code></strong>: Parses the Host header to ensure that it exists and is correctly formatted.</li>
+<li><strong><code>parse_connection</code></strong>: Processes the Connection header to correctly set the connection persistence.</li>
+<li><strong><code>parse_request</code></strong>: Integrates the parsing of all headers and returns a status code (OK, 400, 403, 404, 500) based on the validity of the request.</li>
+</ul>
+<h3 id="12-epoll-context-management">1.2 Epoll Context Management</h3>
+<p>This module manages client connection contexts using a dedicated structure (<code>connection_context</code>) that stores:</p>
+<ul>
+<li>The file descriptor for the connection.</li>
+<li>Buffers for reading HTTP requests and constructing response headers.</li>
+<li>File descriptor and state information for serving static files.</li>
+<li>Functions like <strong><code>create_connection_context</code></strong>, <strong><code>reset_context</code></strong>, and <strong><code>close_connection</code></strong> handle resource allocation, context resetting between requests (especially for keep-alive), and proper cleanup upon disconnection.</li>
+</ul>
+<h3 id="13-http-response-maker">1.3 HTTP Response Maker</h3>
+<p>This module builds the HTTP responses to be sent back to the client. It contains:</p>
+<ul>
+<li><strong><code>prepare_response</code></strong>: Prepares a valid HTTP response header by checking file accessibility, setting the <code>Content-length</code>, and formatting the header based on the requested file.</li>
+<li><strong><code>send_error</code></strong>: Constructs error responses for various error conditions (400, 403, 404, 500) and ensures that the connection is properly closed after sending the error message.</li>
+</ul>
+<h3 id="14-epoll-event-handler">1.4 Epoll Event Handler</h3>
+<p>This module implements the event-driven I/O using epoll. It includes:</p>
+<ul>
+<li><strong><code>handle_new_connection</code></strong>: Accepts new client connections, sets them as non-blocking, and adds them to the epoll instance.</li>
+<li><strong><code>handle_epollin</code></strong>: Handles incoming data on a connection by reading the HTTP request, parsing it, and preparing the response.</li>
+<li><strong><code>handle_epollout</code></strong>: Manages sending response headers and body data, using functions like <strong><code>send_header</code></strong> and <strong><code>send_body</code></strong>. It also handles switching back to the read phase for persistent connections and ensuring proper shutdown during graceful termination.</li>
+</ul>
+<h3 id="15-main-function">1.5 Main Function</h3>
+<p>The <code>main</code> function serves as the entry point for the web server. Its responsibilities include:</p>
+<ul>
+<li>Parsing command-line arguments (port and optional root directory).</li>
+<li>Setting up signal handlers for graceful termination (handling SIGINT and SIGTERM).</li>
+<li>Initializing the listening socket, binding, and setting it to non-blocking mode.</li>
+<li>Creating an epoll instance and entering the main event loop where incoming events are handled.</li>
+<li>Ensuring that active connections are processed before the server shuts down upon receiving a termination signal.</li>
+</ul>
+<hr>
+<h2 id="2-program-test">2. Program Test</h2>
+<p>Below is the testing procedure we used to confirm correctness and robustness:</p>
+<ol>
+<li>
+<p><strong>Basic Testing with <code>curl</code></strong></p>
+<ul>
+<li>Requested various files to confirm normal data transfer and correct <code>Content-length</code>.</li>
+<li>Tested missing or forbidden files (403, 404) during the same runs.</li>
+<li>Verified large file transfers (&gt;2GB) using <code>curl</code> and checksums.</li>
+</ul>
+</li>
+<li>
+<p><strong>Malformed Request Testing</strong></p>
+<ul>
+<li>Employed a custom client that sends incomplete or invalid headers, ensuring the server responds with <code>400 Bad Request</code>.</li>
+<li>Checked that the parser rejects missing <code>Host:</code> or invalid request lines properly.</li>
+</ul>
+</li>
+<li>
+<p><strong>Keep-Alive Tests</strong></p>
+<ul>
+<li>Used a keep-alive test client to send multiple requests over one TCP connection.</li>
+<li>Confirmed that the server reuses the socket for subsequent requests until it sees <code>Connection: close</code> or encounters an error.</li>
+</ul>
+</li>
+<li>
+<p><strong>Concurrent Tests with <code>flexiclient</code></strong></p>
+<ul>
+<li>Used the <code>-active</code> and <code>-time</code> options to open many simultaneous connections.</li>
+<li>Verified the server remains responsive under concurrent I/O.</li>
+</ul>
+</li>
+<li>
+<p><strong>Graceful Termination Test</strong></p>
+<ul>
+<li>Tested graceful termination by requesting a 4GB file transfer and then interrupting the program. Verified that the file was transmitted completely despite the interrupt.</li>
+</ul>
+</li>
+</ol>
+<hr>
+<h2 id="3-known-bugs--weaknesses">3. Known Bugs / Weaknesses</h2>
+<ul>
+<li>No confirmed bugs have been identified so far.</li>
+<li>Potential weaknesses include the need for further security review on input validation and file path sanitization to prevent path traversal attacks.</li>
+<li>Under extreme concurrent connection scenarios or very large file transfers, additional error handling and resource management optimizations might be required.</li>
+</ul>
+<hr>
+<h2 id="4-reference">4. Reference</h2>
+<ul>
+<li>epoll.c example: https://github.com/onestraw/epoll-example/blob/master/epoll.c</li>
+</ul>
+
+</body>
+</html>
