@@ -13,19 +13,20 @@
 #include "mysock.h"
 #include "stcp_api.h"
 #include <assert.h>
-#include <linux/time.h>
+#include <math.h>
+#include <netinet/in.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// todo: remove after completion
+#include <linux/time.h>
+
 #define DEFAULT_WIN_SIZE 3072
 
 enum
 {
-    CSTATE_LISTEN,
-    CSTATE_SYN_SENT,
-    CSTATE_SYN_RECEIVED,
     CSTATE_ESTABLISHED,
     CSTATE_FIN_WAIT_1,
     CSTATE_FIN_WAIT_2,
@@ -37,9 +38,9 @@ enum
 
 typedef struct
 {
-    tcp_seq seq;             // 시작 시퀀스 번호
-    u_int8_t data[STCP_MSS]; // 데이터 내용
-    size_t len;              // 유효한 payload 길이
+    tcp_seq seq;            // 시작 시퀀스 번호
+    uint8_t data[STCP_MSS]; // 데이터 내용
+    size_t len;             // 유효한 payload 길이
 } recv_entry_t;
 
 /* this structure is global to a mysocket descriptor */
@@ -105,14 +106,23 @@ typedef struct
 } context_t;
 
 /* static function forward declaration */
+
+/* Utility functions */
 static void generate_initial_seq_num (context_t *ctx);
 static void update_rto (context_t *ctx);
-static void calculate_timeout (context_t *ctx, struct timespec *timeout);
+static void log_time_and_calculate_timeout (context_t *ctx);
+static void build_header (STCPHeader *hdr, tcp_seq seq, tcp_seq ack,
+                          uint8_t flags);
+static bool_t is_valid_segment (const STCPHeader *hdr, ssize_t len,
+                                uint8_t expected_flags);
+
+/* core logic */
 static int do_active_handshake (mysocket_t sd, context_t *ctx);
 static int do_passive_handshake (mysocket_t sd, context_t *ctx);
 static void control_loop (mysocket_t sd, context_t *ctx);
 
 /* utility function impl */
+
 /* generate initial sequence number for an STCP connection */
 static void
 generate_initial_seq_num (context_t *ctx)
@@ -124,14 +134,16 @@ generate_initial_seq_num (context_t *ctx)
 static void
 update_rto (context_t *ctx)
 {
+    assert (ctx);
     struct timespec now;
     clock_gettime (CLOCK_REALTIME, &now);
 
     double sample = (now.tv_sec - ctx->last_sent_time.tv_sec)
                     + (now.tv_nsec - ctx->last_sent_time.tv_nsec) / 1e9;
 
-    if (ctx->est_rtt < 0)
+    if (ctx->est_rtt < 0) // initial sampling
     {
+
         ctx->est_rtt = sample;
         ctx->dev_rtt = sample / 2;
     }
@@ -139,12 +151,53 @@ update_rto (context_t *ctx)
     {
         const double alpha = 0.125;
         const double beta = 0.25;
+        ctx->est_rtt = (1 - alpha) * ctx->est_rtt + alpha * sample;
         ctx->dev_rtt
             = (1 - beta) * ctx->dev_rtt + beta * fabs (sample - ctx->est_rtt);
-        ctx->est_rtt = (1 - alpha) * ctx->est_rtt + alpha * sample;
     }
 
     ctx->rto = ctx->est_rtt + 4 * ctx->dev_rtt;
+}
+
+static void
+log_time_and_calculate_timeout (context_t *ctx)
+{
+    assert (ctx);
+    struct timespec now;
+    clock_gettime (CLOCK_REALTIME, &now);
+
+    ctx->last_sent_time = now; // log the send_time
+
+    /* calculate timeout */
+    ctx->timeout = now;
+    ctx->timeout.tv_sec += (int)ctx->rto;
+    ctx->timeout.tv_nsec += (ctx->rto - (int)ctx->rto) * 1e9;
+    if (ctx->timeout.tv_nsec >= 1e9) // defensive
+    {
+        ctx->timeout.tv_sec++;
+        ctx->timeout.tv_nsec -= 1e9;
+    }
+}
+
+static void
+build_header (STCPHeader *hdr, tcp_seq seq, tcp_seq ack, uint8_t flags)
+{
+    memset (hdr, 0, sizeof (*hdr));
+    hdr->th_seq = htonl (seq);
+    hdr->th_ack = htonl (ack);
+    hdr->th_off = sizeof (STCPHeader) / 4;
+    hdr->th_flags = flags;
+    hdr->th_win = htons (DEFAULT_WIN_SIZE);
+}
+
+static bool_t
+is_valid_segment (const STCPHeader *hdr, ssize_t len, uint8_t expected_flags)
+{
+    if (len < (ssize_t)sizeof (STCPHeader))
+        return FALSE;
+    if ((hdr->th_flags & expected_flags) != expected_flags)
+        return FALSE;
+    return TRUE;
 }
 
 /* initialise the transport layer, and start the main loop, handling
@@ -197,72 +250,69 @@ transport_init (mysocket_t sd, bool_t is_active)
     free (ctx);
 }
 
+/* Core logic implementation */
 static int
 do_active_handshake (mysocket_t sd, context_t *ctx)
 {
-    u_int8_t buf[sizeof (STCPHeader) + STCP_MSS];
-    struct timespec now;
-    STCPHeader syn = { 0 };
-    syn.th_seq = htonl (ctx->next_seq_num);
-    syn.th_off = sizeof (STCPHeader) / 4;
-    syn.th_flags = TH_SYN;
-    syn.th_win = htons (DEFAULT_WIN_SIZE);
+    uint8_t buf[sizeof (STCPHeader) + STCP_MSS];
+
+    /* send seq = 1 */
+    STCPHeader syn;
+    build_header (&syn, ctx->next_seq_num, 0, TH_SYN);
+
     ctx->retransmission_count = 0;
     while (ctx->retransmission_count < 6)
     {
         stcp_network_send (sd, &syn, sizeof (STCPHeader), NULL);
 
-        clock_gettime (CLOCK_REALTIME, &now);
-        ctx->last_sent_time = now;
-        struct timespec timeout = now;
-        timeout.tv_sec += (int)ctx->rto;
-        timeout.tv_nsec += (ctx->rto - (int)ctx->rto) * 1e9;
+        if (ctx->retransmission_count == 0)
+            ctx->next_seq_num++; // SYN sent, increment seq_num
 
-        unsigned int event = stcp_wait_for_event (sd, NETWORK_DATA, &timeout);
+        log_time_and_calculate_timeout (ctx);
+
+        unsigned int event
+            = stcp_wait_for_event (sd, NETWORK_DATA, &ctx->timeout);
 
         /* timeout case */
         if (!(event & NETWORK_DATA))
         {
             ctx->rto *= 2;
-            goto end_of_loop;
+            ctx->retransmission_count++;
+            continue;
         }
 
         ssize_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
-        STCPHeader *synack = buf;
+        STCPHeader *synack = (STCPHeader *)buf;
 
-        /* invalid packet case */
-        if (n < (ssize_t)sizeof (STCPHeader))
-            goto end_of_loop;
-
-        if ((synack->th_flags & (TH_SYN | TH_ACK)) == (TH_SYN | TH_ACK))
+        if (!is_valid_segment (synack, n, TH_SYN | TH_ACK))
         {
-            /* Check Ack num == base */
-            tcp_seq peer_ack = ntohl (synack->th_ack);
-
-            if (peer_ack != ctx->send_base + 1)
-                goto end_of_loop;
-
-            if (ctx->retransmission_count == 0)
-                update_rto (ctx);
-
-            ctx->peer_initial_seq = ntohl (synack->th_seq);
-
-            STCPHeader ack = { 0 };
-            ack.th_seq = htonl (ctx->next_seq_num + 1);
-            ack.th_ack = htonl (ctx->peer_initial_seq + 1);
-            ack.th_off = sizeof (STCPHeader) / 4;
-            ack.th_flags = TH_ACK;
-            ack.th_win = htons (DEFAULT_WIN_SIZE);
-            stcp_network_send (sd, &ack, sizeof (STCPHeader), NULL);
-
-            ctx->next_seq_num++; // SYN sent
-            ctx->receive_next = ctx->peer_initial_seq + 1;
-            ctx->connection_state = CSTATE_ESTABLISHED;
-            return 0;
+            ctx->retransmission_count++;
+            continue;
         }
-    end_of_loop:
-        ctx->retransmission_count++;
+
+        /* Check Ack num == base + 1 */
+        tcp_seq peer_ack = ntohl (synack->th_ack);
+
+        if (peer_ack != ctx->send_base + 1)
+        {
+            ctx->retransmission_count++;
+            continue;
+        }
+
+        if (ctx->retransmission_count == 0)
+            update_rto (ctx);
+
+        /* here: ack for syn received, update send_base */
+        ctx->send_base = peer_ack;
+        ctx->peer_initial_seq = ntohl (synack->th_seq);
+        ctx->receive_next = ctx->peer_initial_seq + 1;
+        STCPHeader ack;
+        build_header (&ack, ctx->next_seq_num, ctx->receive_next, TH_ACK);
+
+        stcp_network_send (sd, &ack, sizeof (STCPHeader), NULL);
+
+        return 0;
     }
 
     return -1;
@@ -271,72 +321,83 @@ do_active_handshake (mysocket_t sd, context_t *ctx)
 static int
 do_passive_handshake (mysocket_t sd, context_t *ctx)
 {
-    ctx->connection_state = CSTATE_LISTEN;
-    STCPHeader syn;
+    /* receive buffer */
+    uint8_t buf[sizeof (STCPHeader) + STCP_MSS];
 
+    /* receive SYN */
+    STCPHeader *syn;
     while (1)
     {
-        unsigned int event = stcp_wait_for_event (sd, NETWORK_DATA, NULL);
-        if (!(event & NETWORK_DATA))
-            continue;
+        stcp_wait_for_event (sd, NETWORK_DATA, NULL);
 
-        ssize_t n = stcp_network_recv (sd, &syn, sizeof (syn));
-        if (n < (ssize_t)sizeof (STCPHeader))
-            continue;
+        ssize_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
-        if (syn.th_flags & TH_SYN)
+        syn = (STCPHeader *)buf;
+
+        if (is_valid_segment (syn, n, TH_SYN))
         {
-            ctx->peer_initial_seq = ntohl (syn.th_seq);
+            ctx->peer_initial_seq = ntohl (syn->th_seq);
+            ctx->receive_next = ctx->peer_initial_seq + 1;
             break;
         }
     }
 
-    generate_initial_seq_num (ctx);
-    ctx->next_seq_num = ctx->initial_sequence_num;
-    ctx->send_base = ctx->next_seq_num;
+    /* send SYNACK */
+    STCPHeader synack;
+    build_header (&synack, ctx->next_seq_num, ctx->receive_next,
+                  TH_SYN | TH_ACK);
 
-    STCPHeader synack = { 0 };
-    synack.th_seq = htonl (ctx->next_seq_num);
-    synack.th_ack = htonl (ctx->peer_initial_seq + 1);
-    synack.th_off = sizeof (STCPHeader) / 4;
-    synack.th_flags = TH_SYN | TH_ACK;
-    synack.th_win = htons (DEFAULT_WIN_SIZE);
-
-    stcp_network_send (sd, &synack, sizeof (STCPHeader), NULL);
-    clock_gettime (CLOCK_REALTIME, &ctx->last_sent_time);
     ctx->retransmission_count = 0;
-
-    for (int retry = 0; retry < 6; retry++)
+    while (ctx->retransmission_count < 6)
     {
-        struct timespec timeout = ctx->last_sent_time;
-        timeout.tv_sec += (int)ctx->rto;
-        timeout.tv_nsec += (ctx->rto - (int)ctx->rto) * 1e9;
-        if (timeout.tv_nsec >= 1e9)
-        {
-            timeout.tv_sec++;
-            timeout.tv_nsec -= 1e9;
-        }
+        stcp_network_send (sd, &synack, sizeof (STCPHeader), NULL);
 
-        unsigned int event = stcp_wait_for_event (sd, NETWORK_DATA, &timeout);
+        if (ctx->retransmission_count == 0)
+            ctx->next_seq_num++; // SYN sent, increment seq_num
+
+        log_time_and_calculate_timeout (ctx);
+
+        unsigned int event
+            = stcp_wait_for_event (sd, NETWORK_DATA, &ctx->timeout);
+
+        /* timeout case */
         if (!(event & NETWORK_DATA))
         {
-            stcp_network_send (sd, &synack, sizeof (STCPHeader), NULL);
+            ctx->rto *= 2;
             ctx->retransmission_count++;
             continue;
         }
 
-        STCPHeader ack;
-        ssize_t n = stcp_network_recv (sd, &ack, sizeof (ack));
-        if (n < (ssize_t)sizeof (STCPHeader))
-            continue;
+        ssize_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
-        if (ack.th_flags & TH_ACK)
+        STCPHeader *ack = (STCPHeader *)buf;
+
+        if (!is_valid_segment (ack, n, TH_ACK))
         {
-            ctx->receive_next = ctx->peer_initial_seq + 1;
-            ctx->next_seq_num++; // SYN sent
-            ctx->connection_state = CSTATE_ESTABLISHED;
-            return 0;
+            ctx->retransmission_count++;
+            continue;
         }
+
+        /* Check Ack num == base */
+        tcp_seq peer_ack = ntohl (ack->th_ack);
+
+        if (peer_ack != ctx->send_base + 1)
+        {
+            ctx->retransmission_count++;
+            continue;
+        }
+
+        if (ctx->retransmission_count == 0)
+            update_rto (ctx);
+
+        /* here: ack for synack received, update send_base */
+        ctx->send_base = peer_ack;
+        tcp_seq peer_seq_start = ntohl (ack->th_seq);
+        int header_len = ack->th_off * 4;
+        int payload_len = n - header_len;
+
+        ctx->receive_next = peer_seq_start + payload_len;
+        return 0;
     }
 
     return -1;
