@@ -1,1 +1,3 @@
 /hw2/public/template/file_set
+*.o
+*.tar.gz
