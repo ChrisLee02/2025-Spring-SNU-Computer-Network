@@ -24,13 +24,14 @@
 #define MAX_SEGMENTS (DEFAULT_WIN_SIZE / STCP_MSS + 1)
 
 #define MIN_RTO 0.01 // 10ms
-#define MAX_RTO 30.0 // 30초
+#define MAX_RTO 30.0 // 30s
+#define MAX_RETRANSMISSION_COUNT 5
 
 typedef enum
 {
-    EVENT_SEND_FIN, // 내가 FIN 보냄 (APP_CLOSE 등)
-    EVENT_RECV_FIN, // 상대방 FIN 수신 + ACK
-    EVENT_RECV_ACK, // 내 FIN에 대한 ACK 수신
+    EVENT_SEND_FIN,
+    EVENT_RECV_FIN,
+    EVENT_RECV_ACK,
 } stcp_event_t;
 
 typedef enum
@@ -62,10 +63,9 @@ typedef struct
 typedef struct
 {
     /* Connection state */
-    bool_t done; /* TRUE once connection is closed */
-    stcp_state_t
-        connection_state; /* state of the connection (established, etc.) */
-    bool_t is_APP_CLOSE_QUEUED; /* true if app close come and not send */
+    bool_t done;                   /* TRUE once connection is closed */
+    stcp_state_t connection_state; /* state of the connection */
+    bool_t is_APP_CLOSE_QUEUED;    /* true if app close come and not send */
     bool_t is_FIN_SENT;
     bool_t is_FIN_RECEIVED;
 
@@ -77,64 +77,52 @@ typedef struct
     tcp_seq next_seq_num;
     tcp_seq send_base;
     segment_list_t send_buffer;
+
     /* recv window */
-    tcp_seq receive_next; // 다음으로 기대하는 시퀀스 번호 (in-order 수신 기준)
-    segment_list_t recv_buffer;
+    tcp_seq receive_next;
+    segment_list_t receive_buffer;
 
-    /*
-        For variable RTO: use Karn-Partridge algorithm
-        Init:
-            RTO = 1.0
-            estRTT = -1
-            devRTT = 0
-            α = 0.125
-            β = 0.25
-
-        Send:
-            send_time = time_now()
-            retransmitted = false
-
-        Timeout:
-            RTO = RTO * 2
-            retransmitted = true
-
-        ACK received for base:
-            if retransmitted == false:
-                sampleRTT = time_now() - send_time
-
-                if estRTT == -1:
-                    estRTT = sampleRTT
-                    devRTT = sampleRTT / 2
-                else:
-                    estRTT = (1 - α) * estRTT + α * sampleRTT
-                    devRTT = (1 - β) * devRTT + β * |sampleRTT - estRTT|
-
-                RTO = estRTT + 4 * devRTT
-
-            retransmitted = false
-    */
-    struct timespec last_sent_time;
+    /* Timeout and retransmission */
+    struct timespec last_sent_time; // needed to calculate RTO
     int retransmission_count;
 
+    /* RTO state */
     double est_rtt;
     double dev_rtt;
     double rto;
 
     /* Timeout var for send_base */
     struct timespec timeout;
-    bool_t is_timeout_on;
 } context_t;
 
 /* static function forward declaration */
 
-/* Utility functions */
+/*  Buffer Management  */
+static void segment_list_init (segment_list_t *list);
+static void segment_list_clear (segment_list_t *list);
+/* -- Receive buffer -- */
+static void insert_segment_to_receive_buffer (segment_list_t *receive_buffer,
+                                              tcp_seq seq, const uint8_t *data,
+                                              size_t payload_len,
+                                              bool_t is_fin);
+static void flush_in_order_segments_from_receive_buffer (mysocket_t sd,
+                                                         context_t *ctx);
+/* -- Send buffer -- */
+static void enqueue_send_buffer (segment_list_t *send_buffer, tcp_seq seq,
+                                 const uint8_t *data, size_t payload_len,
+                                 bool_t is_fin);
+static void dequeue_send_buffer (segment_list_t *send_buffer, tcp_seq ack);
+static void resend_send_buffer (mysocket_t sd, segment_list_t *send_buffer,
+                                tcp_seq send_base, tcp_seq receive_next);
+
+/* Utility functions - RTO, Timer, Utility */
 static void generate_initial_seq_num (context_t *ctx);
-static void update_rto (context_t *ctx);
+static void update_rto (context_t *ctx, bool_t is_timeout);
 static void log_time_and_calculate_timeout (context_t *ctx);
 static void build_header (STCPHeader *hdr, tcp_seq seq, tcp_seq ack,
                           uint8_t flags);
-static bool_t is_valid_segment (const STCPHeader *hdr, ssize_t len,
-                                uint8_t expected_flags);
+static bool_t is_valid_seg_len_and_flags (const STCPHeader *hdr, ssize_t len,
+                                          uint8_t expected_flags);
 static stcp_state_t transition_state (stcp_state_t state, stcp_event_t event);
 
 /* Handshake logic */
@@ -143,17 +131,16 @@ static int do_passive_handshake (mysocket_t sd, context_t *ctx);
 
 /* Control loop */
 static void control_loop (mysocket_t sd, context_t *ctx);
-
-/* Control loop handlers */
+/* Control loop event handlers */
 static void handle_app_data (mysocket_t sd, context_t *ctx);
 static void handle_network_data (mysocket_t sd, context_t *ctx);
 static void handle_app_close (mysocket_t sd, context_t *ctx);
 static void handle_timeout (mysocket_t sd, context_t *ctx);
 
-static void handle_ack (mysocket_t sd, context_t *ctx, tcp_seq ack);
-static void handle_data (mysocket_t sd, context_t *ctx, tcp_seq seq,
-                         const uint8_t *payload, size_t payload_len,
-                         bool_t is_fin);
+static void handle_ack_from_peer (mysocket_t sd, context_t *ctx, tcp_seq ack);
+static void handle_incoming_segment (mysocket_t sd, context_t *ctx,
+                                     tcp_seq seq, const uint8_t *payload,
+                                     size_t payload_len, bool_t is_fin);
 
 static void
 segment_list_init (segment_list_t *list)
@@ -174,7 +161,6 @@ segment_list_clear (segment_list_t *list)
     list->head = NULL;
 }
 
-// ===================== 수신 측 =======================
 /* static void
 recv_segment_insert_robust (segment_list_t *list, tcp_seq seq,
                             const uint8_t *data, size_t payload_len,
@@ -197,14 +183,16 @@ recv_segment_insert_robust (segment_list_t *list, tcp_seq seq,
 
 } */
 
+/* Receive side buffering */
 static void
-recv_segment_insert (segment_list_t *list, tcp_seq seq, const uint8_t *data,
-                     size_t payload_len, bool_t is_fin)
+insert_segment_to_receive_buffer (segment_list_t *receive_buffer, tcp_seq seq,
+                                  const uint8_t *data, size_t payload_len,
+                                  bool_t is_fin)
 {
     assert (payload_len > 0 || is_fin);
 
     segment_t *prev = NULL;
-    segment_t *cur = list->head;
+    segment_t *cur = receive_buffer->head;
 
     while (cur && cur->seq < seq)
     {
@@ -226,16 +214,18 @@ recv_segment_insert (segment_list_t *list, tcp_seq seq, const uint8_t *data,
     if (prev)
         prev->next = node;
     else
-        list->head = node;
+        receive_buffer->head = node;
 }
 
+/* Receive side flush */
 static void
-flush_in_order_data (mysocket_t sd, context_t *ctx)
+flush_in_order_segments_from_receive_buffer (mysocket_t sd, context_t *ctx)
 {
-    while (ctx->recv_buffer.head
-           && ctx->recv_buffer.head->seq == ctx->receive_next)
+    /* suppose that buffer is sorted and non-overlapped */
+    while (ctx->receive_buffer.head
+           && ctx->receive_buffer.head->seq == ctx->receive_next)
     {
-        segment_t *node = ctx->recv_buffer.head;
+        segment_t *node = ctx->receive_buffer.head;
 
         if (node->payload_len > 0)
         {
@@ -246,24 +236,24 @@ flush_in_order_data (mysocket_t sd, context_t *ctx)
         if (node->is_FIN)
         {
             stcp_fin_received (sd);
-            ctx->receive_next += 1; // FIN 바이트도 시퀀스 넘버에서 1칸 차지
+            ctx->receive_next += 1;
 
             ctx->connection_state
                 = transition_state (ctx->connection_state, EVENT_RECV_FIN);
             ctx->is_FIN_RECEIVED = TRUE;
-            ctx->recv_buffer.head = node->next;
+            ctx->receive_buffer.head = node->next;
             free (node);
             return;
         }
-        ctx->recv_buffer.head = node->next;
+        ctx->receive_buffer.head = node->next;
         free (node);
     }
 }
 
-// ===================== 송신 측 =======================
+/* Send side buffer enqueue */
 static void
-send_segment_buffer (segment_list_t *list, tcp_seq seq, const uint8_t *data,
-                     size_t payload_len, bool_t is_fin)
+enqueue_send_buffer (segment_list_t *send_buffer, tcp_seq seq,
+                     const uint8_t *data, size_t payload_len, bool_t is_fin)
 {
     segment_t *node = malloc (sizeof (segment_t));
     node->seq = seq;
@@ -272,45 +262,43 @@ send_segment_buffer (segment_list_t *list, tcp_seq seq, const uint8_t *data,
     memcpy (node->data, data, payload_len);
 
     node->next = NULL;
-    if (!list->head)
+    if (!send_buffer->head)
     {
-        list->head = node;
+        send_buffer->head = node;
         return;
     }
-    segment_t *cur = list->head;
+    segment_t *cur = send_buffer->head;
     while (cur->next)
         cur = cur->next;
     cur->next = node;
 }
 
+/* Send side buffer dequeue */
 static void
-send_segment_ack (segment_list_t *list, tcp_seq ack)
+dequeue_send_buffer (segment_list_t *send_buffer, tcp_seq ack)
 {
-    while (list->head
-           && list->head->seq + list->head->payload_len
-                      + (list->head->is_FIN ? 1 : 0)
+    while (send_buffer->head
+           && send_buffer->head->seq + send_buffer->head->payload_len
+                      + (send_buffer->head->is_FIN ? 1 : 0)
                   <= ack)
     {
-        segment_t *node = list->head;
-        list->head = node->next;
+        segment_t *node = send_buffer->head;
+        send_buffer->head = node->next;
         free (node);
     }
 }
 static void
-resend_from_send_base (mysocket_t sd, segment_list_t *list, tcp_seq send_base,
-                       tcp_seq recv_next)
+resend_send_buffer (mysocket_t sd, segment_list_t *send_buffer,
+                    tcp_seq send_base, tcp_seq receive_next)
 {
 
-    segment_t *cur = list->head;
+    segment_t *cur = send_buffer->head;
     while (cur)
     {
 
         STCPHeader hdr;
-        build_header (&hdr, cur->seq, recv_next,
+        build_header (&hdr, cur->seq, receive_next,
                       TH_ACK | (cur->is_FIN ? TH_FIN : 0));
-        /*   printf ("[RESEND] seq=%u len=%zu ack=%u flags=0x%x |
-           send_base=%u\n", cur->seq, cur->payload_len, recv_next,
-           hdr.th_flags, send_base); */
         stcp_network_send (sd, &hdr, sizeof (STCPHeader), cur->data,
                            cur->payload_len, NULL);
         cur = cur->next;
@@ -328,9 +316,50 @@ generate_initial_seq_num (context_t *ctx)
 }
 
 static void
-update_rto (context_t *ctx)
+update_rto (context_t *ctx, bool_t is_timeout)
 {
+    /*
+    For variable RTO: use Karn-Partridge algorithm
+    Init:
+        RTO = 1.0
+        estRTT = -1
+        devRTT = 0
+        α = 0.125
+        β = 0.25
+
+    Send:
+        send_time = time_now()
+        retransmitted = false
+
+    Timeout:
+        RTO = RTO * 2
+        retransmitted = true
+
+    ACK received for base:
+        if retransmitted == false:
+            sampleRTT = time_now() - send_time
+
+            if estRTT == -1:
+                estRTT = sampleRTT
+                devRTT = sampleRTT / 2
+            else:
+                devRTT = (1 - β) * devRTT + β * |sampleRTT - estRTT|
+                # devRTT should come first
+                estRTT = (1 - α) * estRTT + α * sampleRTT
+
+            RTO = estRTT + 4 * devRTT
+
+        retransmitted = false
+*/
+
     assert (ctx);
+
+    if (is_timeout)
+    {
+        ctx->rto *= 2;
+        return;
+    }
+
     struct timespec now;
     clock_gettime (CLOCK_REALTIME, &now);
 
@@ -347,9 +376,10 @@ update_rto (context_t *ctx)
     {
         const double alpha = 0.125;
         const double beta = 0.25;
-        ctx->est_rtt = (1 - alpha) * ctx->est_rtt + alpha * sample;
+
         ctx->dev_rtt
             = (1 - beta) * ctx->dev_rtt + beta * fabs (sample - ctx->est_rtt);
+        ctx->est_rtt = (1 - alpha) * ctx->est_rtt + alpha * sample;
     }
 
     ctx->rto = ctx->est_rtt + 4 * ctx->dev_rtt;
@@ -373,13 +403,11 @@ log_time_and_calculate_timeout (context_t *ctx)
     ctx->timeout = now;
     ctx->timeout.tv_sec += (int)ctx->rto;
     ctx->timeout.tv_nsec += (ctx->rto - (int)ctx->rto) * 1e9;
-    if (ctx->timeout.tv_nsec >= 1e9) // defensive
+    if (ctx->timeout.tv_nsec >= 1e9) // defensive purpose
     {
         ctx->timeout.tv_sec++;
         ctx->timeout.tv_nsec -= 1e9;
     }
-
-    ctx->is_timeout_on = TRUE;
 }
 
 static void
@@ -394,7 +422,8 @@ build_header (STCPHeader *hdr, tcp_seq seq, tcp_seq ack, uint8_t flags)
 }
 
 static bool_t
-is_valid_segment (const STCPHeader *hdr, ssize_t len, uint8_t expected_flags)
+is_valid_seg_len_and_flags (const STCPHeader *hdr, ssize_t len,
+                            uint8_t expected_flags)
 {
     if (len < (ssize_t)sizeof (STCPHeader))
         return FALSE;
@@ -434,7 +463,7 @@ transition_state (stcp_state_t state, stcp_event_t event)
         switch (event)
         {
         case EVENT_RECV_FIN:
-            return CSTATE_CLOSED; // ACK는 바로 보내고 종료
+            return CSTATE_CLOSED;
         default:
             return state;
         }
@@ -478,7 +507,6 @@ transition_state (stcp_state_t state, stcp_event_t event)
 void
 transport_init (mysocket_t sd, bool_t is_active)
 {
-    // printf ("transport_init: %d\n", sd);
     context_t *ctx;
 
     ctx = (context_t *)calloc (1, sizeof (context_t));
@@ -486,25 +514,19 @@ transport_init (mysocket_t sd, bool_t is_active)
 
     generate_initial_seq_num (ctx);
 
-    /* XXX: you should send a SYN packet here if is_active, or wait for one
-     * to arrive if !is_active.  after the handshake completes, unblock the
-     * application with stcp_unblock_application(sd).  you may also use
-     * this to communicate an error condition back to the application, e.g.
-     * if connection fails; to do so, just set errno appropriately (e.g. to
-     * ECONNREFUSED, etc.) before calling the function.
-     */
-
+    segment_list_init (&ctx->send_buffer);
+    segment_list_init (&ctx->receive_buffer);
     ctx->next_seq_num = ctx->initial_sequence_num;
     ctx->send_base = ctx->initial_sequence_num;
     ctx->rto = 1.0;
-    ctx->est_rtt = -1.0; // No sampleRTT yet
+    ctx->est_rtt = -1.0;
     ctx->dev_rtt = 0.0;
     ctx->done = FALSE;
 
-    int result = is_active ? do_active_handshake (sd, ctx)
-                           : do_passive_handshake (sd, ctx);
+    int handshake_result = is_active ? do_active_handshake (sd, ctx)
+                                     : do_passive_handshake (sd, ctx);
 
-    if (result < 0)
+    if (handshake_result < 0)
     {
         errno = ECONNREFUSED;
         stcp_unblock_application (sd);
@@ -517,14 +539,12 @@ transport_init (mysocket_t sd, bool_t is_active)
     ctx->connection_state = CSTATE_ESTABLISHED;
     stcp_unblock_application (sd);
 
-    // printf ("go control loop\n");
-
     control_loop (sd, ctx);
 
     /* do any cleanup here */
-    // list cleanup needed
+
     segment_list_clear (&ctx->send_buffer);
-    segment_list_clear (&ctx->recv_buffer);
+    segment_list_clear (&ctx->receive_buffer);
     free (ctx);
 }
 
@@ -532,18 +552,15 @@ transport_init (mysocket_t sd, bool_t is_active)
 static int
 do_active_handshake (mysocket_t sd, context_t *ctx)
 {
-    // printf ("do_active_handshake: %d\n", sd);
     uint8_t buf[sizeof (STCPHeader) + STCP_MSS];
 
-    /* send seq = 1 */
+    /* build and send SYN */
     STCPHeader syn;
     build_header (&syn, ctx->next_seq_num, 0, TH_SYN);
 
     ctx->retransmission_count = 0;
-    while (ctx->retransmission_count < 6)
+    while (ctx->retransmission_count <= MAX_RETRANSMISSION_COUNT)
     {
-        // printf ("ctx->retransmission_count: %d\n",
-        // ctx->retransmission_count);
         stcp_network_send (sd, &syn, sizeof (STCPHeader), NULL);
 
         if (ctx->retransmission_count == 0)
@@ -555,22 +572,19 @@ do_active_handshake (mysocket_t sd, context_t *ctx)
             = stcp_wait_for_event (sd, NETWORK_DATA, &ctx->timeout);
 
         /* timeout case */
-        if (!(event & NETWORK_DATA))
+        if (event == TIMEOUT)
         {
-            ctx->rto *= 2;
+            update_rto (ctx, TRUE);
             ctx->retransmission_count++;
             continue;
         }
 
-        // todo: 사실 여기는 network_recv가 세그먼트 단위로 받고 잘린 부분은
-        // 버리기 때문에, 굳이 페이로드 버퍼를 둘 필욘 없었음,,
         ssize_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
         STCPHeader *synack = (STCPHeader *)buf;
 
-        if (!is_valid_segment (synack, n, TH_SYN | TH_ACK))
+        if (!is_valid_seg_len_and_flags (synack, n, TH_SYN | TH_ACK))
         {
-            ctx->retransmission_count++;
             continue;
         }
 
@@ -579,14 +593,15 @@ do_active_handshake (mysocket_t sd, context_t *ctx)
 
         if (peer_ack != ctx->send_base + 1)
         {
-            ctx->retransmission_count++;
             continue;
         }
 
+        /* Connection established  */
         if (ctx->retransmission_count == 0)
-            update_rto (ctx);
+            update_rto (ctx, FALSE);
 
-        /* here: ack for syn received, update send_base */
+        /* update send_base, peer's seq number, receive_next, and
+         * retransmission_count */
         ctx->send_base = peer_ack;
         ctx->peer_initial_seq = ntohl (synack->th_seq);
         ctx->receive_next = ctx->peer_initial_seq + 1;
@@ -605,20 +620,20 @@ do_active_handshake (mysocket_t sd, context_t *ctx)
 static int
 do_passive_handshake (mysocket_t sd, context_t *ctx)
 {
-    /* receive buffer */
     uint8_t buf[sizeof (STCPHeader) + STCP_MSS];
 
     /* receive SYN */
     STCPHeader *syn;
     while (1)
     {
+        /* wait without timeout */
         stcp_wait_for_event (sd, NETWORK_DATA, NULL);
 
         ssize_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
         syn = (STCPHeader *)buf;
 
-        if (is_valid_segment (syn, n, TH_SYN))
+        if (is_valid_seg_len_and_flags (syn, n, TH_SYN))
         {
             ctx->peer_initial_seq = ntohl (syn->th_seq);
             ctx->receive_next = ctx->peer_initial_seq + 1;
@@ -626,7 +641,7 @@ do_passive_handshake (mysocket_t sd, context_t *ctx)
         }
     }
 
-    /* send SYNACK */
+    /* build SYNACK segment */
     STCPHeader synack;
     build_header (&synack, ctx->next_seq_num, ctx->receive_next,
                   TH_SYN | TH_ACK);
@@ -634,31 +649,33 @@ do_passive_handshake (mysocket_t sd, context_t *ctx)
     ctx->retransmission_count = 0;
     while (ctx->retransmission_count < 6)
     {
+        /* send SYNACK */
         stcp_network_send (sd, &synack, sizeof (STCPHeader), NULL);
-
-        if (ctx->retransmission_count == 0)
-            ctx->next_seq_num++; // SYN sent, increment seq_num
-
         log_time_and_calculate_timeout (ctx);
 
+        ctx->next_seq_num
+            = ctx->send_base + 1; // SYNACK sent, increase 1 from base
+
+        /* wait for ACK */
         unsigned int event
             = stcp_wait_for_event (sd, NETWORK_DATA, &ctx->timeout);
 
         /* timeout case */
         if (!(event & NETWORK_DATA))
         {
-            ctx->rto *= 2;
+
+            update_rto (ctx, TRUE);
             ctx->retransmission_count++;
             continue;
         }
 
+        /* receive ack */
         ssize_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
         STCPHeader *ack = (STCPHeader *)buf;
 
-        if (!is_valid_segment (ack, n, TH_ACK))
+        if (!is_valid_seg_len_and_flags (ack, n, TH_ACK))
         {
-            ctx->retransmission_count++;
             continue;
         }
 
@@ -667,24 +684,24 @@ do_passive_handshake (mysocket_t sd, context_t *ctx)
 
         if (peer_ack != ctx->send_base + 1)
         {
-            ctx->retransmission_count++;
             continue;
         }
 
         if (ctx->retransmission_count == 0)
-            update_rto (ctx);
+            update_rto (ctx, FALSE);
 
-        /* here: ack for synack received, update send_base */
+        /* update send_base, peer's seq number, receive_next, and
+         * retransmission_count */
         ctx->send_base = peer_ack;
-        ctx->retransmission_count = 0;
-        tcp_seq peer_seq_start = ntohl (ack->th_seq);
+        ctx->peer_initial_seq = ntohl (ack->th_seq);
         int header_len = ack->th_off * 4;
         int payload_len = n - header_len;
         if (payload_len > 0)
         {
             stcp_app_send (sd, buf + header_len, payload_len);
         }
-        ctx->receive_next = peer_seq_start + payload_len;
+        ctx->receive_next = ctx->peer_initial_seq + payload_len;
+        ctx->retransmission_count = 0;
         return 0;
     }
 
@@ -708,61 +725,34 @@ control_loop (mysocket_t sd, context_t *ctx)
     {
         unsigned int event;
 
+        // timeout if there's any in-flight segment
         bool_t waiting_for_ack = (ctx->send_base != ctx->next_seq_num);
 
-        // 여기서 무작정 ANY_EVENT를 기다리면 안됩니다,, 윈도우에 여유가 없으면
-        // 애초에 그 이벤트를 잠시 차단해주는게 맞음. 두 윈도우 버퍼의 차지된
-        // 사이즈 계산, 꽉 찼는지 bool 변수로 두 개 저장 후 플래그 설정 시 사용
-
-        int wait_flag = 0;
+        unsigned int wait_flag = NETWORK_DATA;
         int send_win_remain
             = (ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num;
+
+        // wait for send event only if there's space in the send window
         if (send_win_remain > 0)
         {
-            wait_flag |= APP_DATA;
-            wait_flag |= APP_CLOSE_REQUESTED;
+            wait_flag |= (APP_DATA | APP_CLOSE_REQUESTED);
         }
-
-        wait_flag |= NETWORK_DATA;
 
         event = stcp_wait_for_event (sd, wait_flag,
                                      waiting_for_ack ? &ctx->timeout : NULL);
 
-        /* print effective event here, in string */
-        /*  if ((event & APP_DATA))
-         {
-             printf ("APP_DATA\n");
-         }
-
-         if ((event & NETWORK_DATA))
-         {
-             printf ("NETWORK_DATA\n");
-         }
-
-         if ((event & APP_CLOSE_REQUESTED))
-         {
-             printf ("APP_CLOSE_REQUESTED\n");
-         }
-
-         if (event == TIMEOUT)
-         {
-             printf ("TIMEOUT\n");
-         } */
-
-        // ---------------------
-
-        if ((event & APP_DATA) == APP_DATA)
+        if (event & APP_DATA)
         {
             handle_app_data (sd, ctx);
         }
 
-        if ((event & NETWORK_DATA) == NETWORK_DATA)
+        if (event & NETWORK_DATA)
 
         {
             handle_network_data (sd, ctx);
         }
 
-        if ((event & APP_CLOSE_REQUESTED) == APP_CLOSE_REQUESTED)
+        if (event & APP_CLOSE_REQUESTED)
         {
             handle_app_close (sd, ctx);
         }
@@ -780,7 +770,7 @@ control_loop (mysocket_t sd, context_t *ctx)
 static void
 handle_app_data (mysocket_t sd, context_t *ctx)
 {
-    if (ctx->is_FIN_SENT)
+    if (ctx->is_FIN_SENT) // after CLOSE requested from app, ignore APP_DATA
     {
         return;
     }
@@ -788,7 +778,7 @@ handle_app_data (mysocket_t sd, context_t *ctx)
     int win_remain = (ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num;
     size_t len_to_read = (win_remain < STCP_MSS) ? win_remain : STCP_MSS;
 
-    if (len_to_read == 0)
+    if (len_to_read == 0) // already checked in control_loop,,
         return;
 
     uint8_t payload[STCP_MSS];
@@ -797,47 +787,34 @@ handle_app_data (mysocket_t sd, context_t *ctx)
     if (payload_len == 0)
         return;
 
+    /* build and send segment */
     STCPHeader hdr;
     build_header (&hdr, ctx->next_seq_num, ctx->receive_next, TH_ACK);
-
-    /*  printf ("[SEND] seq=%u len=%zu ack=%u flags=0x%x | send_base=%u "
-             "next_seq_num=%u win_remain=%d\n",
-             ctx->next_seq_num, payload_len, ctx->receive_next, hdr.th_flags,
-             ctx->send_base, ctx->next_seq_num,
-             (int)((ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num));
-     */
-
     stcp_network_send (sd, &hdr, sizeof (STCPHeader), payload, payload_len,
                        NULL);
 
-    if (ctx->send_base == ctx->next_seq_num)
-        log_time_and_calculate_timeout (
-            ctx); // 버퍼가 빈 상태에서 전송: 타이머 시작
-
-    // buffer to send_window
-    send_segment_buffer (&ctx->send_buffer, ctx->next_seq_num, payload,
+    /* buffer to send_window */
+    enqueue_send_buffer (&ctx->send_buffer, ctx->next_seq_num, payload,
                          payload_len, FALSE);
 
-    // update next_seq_num
+    /* if it is first in-flight segment, start timer */
+    if (ctx->send_base == ctx->next_seq_num)
+        log_time_and_calculate_timeout (ctx);
+
+    /* update next_seq_num */
     ctx->next_seq_num += payload_len;
 }
 
 static void
 handle_network_data (mysocket_t sd, context_t *ctx)
 {
-    // TODO: receive segment from peer
-    //       if ACK: update send_base + update timer, rto,
-    //       init retransmission_count to 0
-    //       if DATA: push to app, send ACK back
-    //       if FIN: send ACK back, update state to CLOSE_WAIT
-
     uint8_t buf[sizeof (STCPHeader) + STCP_MSS];
     size_t n = stcp_network_recv (sd, buf, sizeof (buf));
 
-    if (n < (size_t)sizeof (STCPHeader))
-        return; // 잘못된 segment, 무시
+    if (!is_valid_seg_len_and_flags ((STCPHeader *)buf, n, 0))
+        return;
 
-    //  todo: 여기도 리팩토링 가능할듯 parsing logic
+    /* parse header and payload */
     STCPHeader *hdr = (STCPHeader *)buf;
     int header_len = hdr->th_off * 4;
     int payload_len = n - header_len;
@@ -848,32 +825,29 @@ handle_network_data (mysocket_t sd, context_t *ctx)
 
     uint8_t flags = hdr->th_flags;
 
-    /*  printf (
-         "[RECV] seq=%u len=%d ack=%u flags=0x%x | recv_next=%u win_end=%u\n",
-         seq, payload_len, ack, flags, ctx->receive_next,
-         ctx->receive_next + DEFAULT_WIN_SIZE); */
-
     int is_fin = (flags & TH_FIN) ? 1 : 0;
 
-    // ----- ACK 처리 -----
+    /* ACK handler */
     if (flags & TH_ACK)
     {
-        handle_ack (sd, ctx, ack);
+        handle_ack_from_peer (sd, ctx, ack);
     }
 
-    // 데이터/FIN 통합 처리
+    /* Payload, FIN handler */
     if (payload_len > 0 || is_fin)
     {
-        handle_data (sd, ctx, seq, payload, payload_len, is_fin);
+        handle_incoming_segment (sd, ctx, seq, payload, payload_len, is_fin);
     }
 }
 
 static void
 handle_app_close (mysocket_t sd, context_t *ctx)
 {
-    // TODO: send FIN
-    //       update state to FIN_SENT
-    //       wait for ACK or FIN
+    if (ctx->is_FIN_SENT) // after CLOSE requested from app, ignore APP_CLOSE
+    {
+        return;
+    }
+
     int win_remain = (ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num;
     if (win_remain > 0)
     {
@@ -882,15 +856,21 @@ handle_app_close (mysocket_t sd, context_t *ctx)
                       TH_ACK | TH_FIN);
         stcp_network_send (sd, &hdr, sizeof (STCPHeader), NULL);
 
-        send_segment_buffer (&ctx->send_buffer, ctx->next_seq_num, NULL, 0,
+        enqueue_send_buffer (&ctx->send_buffer, ctx->next_seq_num, NULL, 0,
                              TRUE);
 
         if (ctx->send_base == ctx->next_seq_num)
             log_time_and_calculate_timeout (ctx);
+
         ctx->next_seq_num += 1;
     }
     else
     {
+        /*
+            whenever a packet is acked and send buffer is flushed
+            and if is_APP_CLOSE_QUEUED is TRUE then FIN will be sent and
+            buffered
+        */
         ctx->is_APP_CLOSE_QUEUED = TRUE;
     }
     // state transition, set flag
@@ -902,35 +882,89 @@ handle_app_close (mysocket_t sd, context_t *ctx)
 static void
 handle_timeout (mysocket_t sd, context_t *ctx)
 {
-    /*     printf ("rto: %f\n", ctx->rto);
-        printf ("time now: %ld.%09ld\n", ctx->timeout.tv_sec,
-                ctx->timeout.tv_nsec);
-        printf ("timeout, retransmission_count: %d\n",
-       ctx->retransmission_count); */
+    /* if already retransmitted 5 times, then set state CLOSED and set errno,
+       then return
+    */
     if (ctx->retransmission_count == 5)
     {
-        // send fin
         ctx->connection_state = CSTATE_CLOSED;
         errno = ECONNABORTED;
         return;
     }
 
-    // Go-Back-N: unacked segment부터 전부 재전송
-    resend_from_send_base (sd, &ctx->send_buffer, ctx->send_base,
-                           ctx->receive_next);
+    // Go-Back-N: send all buffered in-flight packets
+    resend_send_buffer (sd, &ctx->send_buffer, ctx->send_base,
+                        ctx->receive_next);
 
-    ctx->rto *= 2;
+    /*
+        timeout happened, update rto
+        after update rto, set new timeout
+     */
+    update_rto (ctx, TRUE);
+    log_time_and_calculate_timeout (ctx);
 
     ctx->retransmission_count++;
-
-    log_time_and_calculate_timeout (ctx);
 }
 
 static void
-handle_data (mysocket_t sd, context_t *ctx, tcp_seq seq,
-             const uint8_t *payload, size_t payload_len, bool_t is_fin)
+handle_ack_from_peer (mysocket_t sd, context_t *ctx, tcp_seq ack)
 {
-    if (ctx->is_FIN_RECEIVED) // 상대 FIN을 ACK한 후에는 ACK만 처리한다.
+    if (ack <= ctx->send_base || ack > ctx->next_seq_num)
+        return;
+
+    if (ctx->retransmission_count == 0)
+        update_rto (ctx, FALSE);
+
+    dequeue_send_buffer (&ctx->send_buffer, ack);
+    ctx->send_base = ack;
+    ctx->retransmission_count = 0;
+
+    if (ctx->send_base != ctx->next_seq_num)
+        log_time_and_calculate_timeout (ctx);
+
+    /*
+        whenever a packet is acked and send buffer is flushed
+        and if is_APP_CLOSE_QUEUED is TRUE then FIN will be sent and
+        buffered
+    */
+    if (ctx->is_APP_CLOSE_QUEUED)
+    {
+        int win_remain
+            = (ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num;
+        assert (win_remain > 0); // after ack, window size should be positive
+
+        STCPHeader hdr;
+        build_header (&hdr, ctx->next_seq_num, ctx->receive_next,
+                      TH_ACK | TH_FIN);
+        stcp_network_send (sd, &hdr, sizeof (STCPHeader), NULL);
+
+        enqueue_send_buffer (&ctx->send_buffer, ctx->next_seq_num, NULL, 0,
+                             TRUE);
+
+        if (ctx->send_base == ctx->next_seq_num)
+            log_time_and_calculate_timeout (ctx);
+
+        ctx->next_seq_num += 1;
+        ctx->is_APP_CLOSE_QUEUED = FALSE;
+    }
+
+    /* If there's no in-flight segment after FIN sent,
+       it means that our FIN is acked by peer.
+    */
+    if (ctx->is_FIN_SENT && ctx->send_base == ctx->next_seq_num)
+    {
+        ctx->connection_state
+            = transition_state (ctx->connection_state, EVENT_RECV_ACK);
+    }
+}
+
+static void
+handle_incoming_segment (mysocket_t sd, context_t *ctx, tcp_seq seq,
+                         const uint8_t *payload, size_t payload_len,
+                         bool_t is_fin)
+{
+    if (ctx->is_FIN_RECEIVED) // After acked peer's FIN, only care about ACK
+                              // from peer
 
     {
         return;
@@ -942,30 +976,22 @@ handle_data (mysocket_t sd, context_t *ctx, tcp_seq seq,
     tcp_seq win_start = ctx->receive_next;
     tcp_seq win_end = win_start + DEFAULT_WIN_SIZE;
 
-    // too old data (이미 받은 범위이면 ACK 재전송)
+    /* too old data, send ACK for receive_next */
     if (seg_end <= win_start)
     {
         STCPHeader ack;
         build_header (&ack, ctx->next_seq_num, ctx->receive_next, TH_ACK);
         stcp_network_send (sd, &ack, sizeof (STCPHeader), NULL);
 
-        // debug
-
-        /*         printf (
-                    "[ACK] seq=%u len=%zu ack=%u flags=0x%x | send_base=%u "
-                    "next_seq_num=%u win_remain=%d\n",
-                    ctx->next_seq_num, payload_len, ctx->receive_next,
-           ack.th_flags, ctx->send_base, ctx->next_seq_num,
-                    (int)((ctx->send_base + DEFAULT_WIN_SIZE) -
-           ctx->next_seq_num)); */
         return;
     }
 
-    // too new data (수신 윈도우를 초과한 데이터는 무시)
+    /* too new data, simply drop */
     if (seg_start >= win_end)
         return;
 
-    // 앞쪽을 먼저 자른다.
+    /* Handling segments that partially overlap with the receive window */
+    /* Drop already received data from front-side */
     if (seg_start < win_start)
     {
         size_t cut = win_start - seg_start;
@@ -980,76 +1006,28 @@ handle_data (mysocket_t sd, context_t *ctx, tcp_seq seq,
         }
     }
 
-    // 뒤쪽을 자른다.
+    /* Drop beyond the receive window from back-side */
     if (seg_end > win_end)
     {
         size_t cut = seg_end - win_end;
+        if (is_fin)
+        {
+            is_fin = 0; // Drop FIN which is last byte
+            cut--;
+        }
         payload_len -= cut;
-        is_fin = 0; // 뒤 overlap이 있으면 FIN은 같이 넣지 않음
     }
 
-    recv_segment_insert (&ctx->recv_buffer, seq, payload, payload_len, is_fin);
+    insert_segment_to_receive_buffer (&ctx->receive_buffer, seq, payload,
+                                      payload_len, is_fin);
 
-    // flush in-order data (데이터와 FIN을 통합적으로)
-    flush_in_order_data (sd, ctx);
+    // flush in-order data to app and update receive_next
+    flush_in_order_segments_from_receive_buffer (sd, ctx);
 
-    // (ACK는 flush 후에 보내는 게 TCP 스타일)
+    // send ACK
     STCPHeader ack;
     build_header (&ack, ctx->next_seq_num, ctx->receive_next, TH_ACK);
     stcp_network_send (sd, &ack, sizeof (STCPHeader), NULL);
-
-    /*   printf ("[ACK] seq=%u len=%zu ack=%u flags=0x%x | send_base=%u "
-              "next_seq_num=%u win_remain=%d\n",
-              ctx->next_seq_num, payload_len, ctx->receive_next, ack.th_flags,
-              ctx->send_base, ctx->next_seq_num,
-              (int)((ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num));
-     */
-}
-
-static void
-handle_ack (mysocket_t sd, context_t *ctx, tcp_seq ack)
-{
-    if (ack <= ctx->send_base || ack > ctx->next_seq_num)
-        return;
-
-    if (ctx->retransmission_count == 0)
-        update_rto (ctx);
-
-    send_segment_ack (&ctx->send_buffer, ack);
-    ctx->send_base = ack;
-    ctx->retransmission_count = 0;
-
-    if (ctx->send_base != ctx->next_seq_num)
-        log_time_and_calculate_timeout (ctx);
-
-    // FIN 재전송 조건 검사
-    if (ctx->is_APP_CLOSE_QUEUED)
-    {
-        int win_remain
-            = (ctx->send_base + DEFAULT_WIN_SIZE) - ctx->next_seq_num;
-        assert (win_remain > 0); // after ack, window size should be positive
-
-        STCPHeader hdr;
-        build_header (&hdr, ctx->next_seq_num, ctx->receive_next,
-                      TH_ACK | TH_FIN);
-        stcp_network_send (sd, &hdr, sizeof (STCPHeader), NULL);
-
-        send_segment_buffer (&ctx->send_buffer, ctx->next_seq_num, NULL, 0,
-                             TRUE);
-
-        if (ctx->send_base == ctx->next_seq_num)
-            log_time_and_calculate_timeout (ctx);
-
-        ctx->next_seq_num += 1;
-        ctx->is_APP_CLOSE_QUEUED = FALSE;
-    }
-
-    // 상대가 나의 FIN을 ACK했는지 체크.
-    if (ctx->is_FIN_SENT && ctx->send_base == ctx->next_seq_num)
-    {
-        ctx->connection_state
-            = transition_state (ctx->connection_state, EVENT_RECV_ACK);
-    }
 }
 
 /**********************************************************************/
