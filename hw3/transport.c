@@ -23,7 +23,7 @@
 #define DEFAULT_WIN_SIZE 3072
 #define MAX_SEGMENTS (DEFAULT_WIN_SIZE / STCP_MSS + 1)
 
-#define MIN_RTO 0.1  // 100ms
+#define MIN_RTO 0.01 // 10ms
 #define MAX_RTO 30.0 // 30초
 
 typedef enum
@@ -918,17 +918,6 @@ handle_timeout (mysocket_t sd, context_t *ctx)
     // Go-Back-N: unacked segment부터 전부 재전송
     resend_from_send_base (sd, &ctx->send_buffer, ctx->send_base,
                            ctx->receive_next);
-    // RTO 갱신
-    /* if (ctx->retransmission_count == 0)
-    {
-        ctx->rto = 1.0;
-        ctx->est_rtt = -1.0;
-        ctx->dev_rtt = 0.0;
-    }
-    else
-    {
-        ctx->rto *= 2;
-    } */
 
     ctx->rto *= 2;
 
