@@ -22,7 +22,7 @@
 
 #define DEFAULT_WIN_SIZE 3072
 
-#define MIN_RTO 0.01 // 10ms
+#define MIN_RTO 0.1  // 10ms
 #define MAX_RTO 30.0 // 30s
 #define MAX_RETRANSMISSION_COUNT 5
 
