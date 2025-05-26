@@ -1,0 +1,10 @@
+setup.py
+sr/VNSProtocol.py
+sr/__init__.py
+sr/ofhandler.py
+sr/srhandler.py
+sr.egg-info/PKG-INFO
+sr.egg-info/SOURCES.txt
+sr.egg-info/dependency_links.txt
+sr.egg-info/requires.txt
+sr.egg-info/top_level.txt
