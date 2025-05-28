@@ -317,13 +317,14 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                                 ETHER_ADDR_LEN);
 
                         free (arpentry);
-                        sr_send_packet (sr, new_pck, new_len, ifc->name);
+                        sr_send_packet (sr, new_pck, new_len,
+                                        rtentry->interface);
                     }
                     else
                     {
-                        arpreq = sr_arpcache_queuereq (&(sr->cache),
-                                                       nexthop_ip, new_pck,
-                                                       new_len, ifc->name);
+                        arpreq = sr_arpcache_queuereq (
+                            &(sr->cache), nexthop_ip, new_pck, new_len,
+                            rtentry->interface);
                         sr_arpcache_handle_arpreq (sr, arpreq);
                         /* 나머지는 apr receive에서 처리한다. */
                     }
