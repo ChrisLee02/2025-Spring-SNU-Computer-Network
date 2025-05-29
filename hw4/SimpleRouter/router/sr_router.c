@@ -70,6 +70,27 @@ ip_black_list (struct sr_ip_hdr *iph)
 
     /* use mask with & operation,, */
 
+    uint32_t src = ntohl (iph->ip_src);
+    uint32_t dst = ntohl (iph->ip_dst);
+    uint32_t blacklist_base = ntohl (inet_addr (ip_blacklist));
+    uint32_t msk = ntohl (inet_addr (mask));
+
+    if ((src & msk) == (blacklist_base & msk))
+    {
+        fprintf (stderr, "[IP blocked] : %s\n",
+                 inet_ntoa (*(struct in_addr *)&iph->ip_src));
+        return 1;
+    }
+
+    if ((dst & msk) == (blacklist_base & msk))
+    {
+        fprintf (stderr, "[IP blocked] : %s\n",
+                 inet_ntoa (*(struct in_addr *)&iph->ip_dst));
+        return 1;
+    }
+
+    return 0;
+
     /****************************************************/
 }
 /*---------------------------------------------------------------------
@@ -350,7 +371,7 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
             {
 
                 /* check TTL expiration */
-                if (i_hdr0->ip_ttl == 1)
+                if (i_hdr0->ip_ttl <= 1)
                 {
                     /**************** fill in code here *****************/
                     /* screwed up, send back */
