@@ -3,6 +3,7 @@
 #include "sr_protocol.h"
 #include "sr_router.h"
 #include "sr_rt.h"
+#include <assert.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <sched.h>
@@ -139,8 +140,10 @@ sr_arpcache_handle_arpreq (struct sr_instance *sr, struct sr_arpreq *req)
                 memcpy (e_hdr->ether_shost, ifc->addr, ETHER_ADDR_LEN);
                 e_hdr->ether_type = htons (ethertype_ip);
 
-                uint32_t nexthop_ip
+                /* uint32_t nexthop_ip
                     = rtentry->gw.s_addr ? rtentry->gw.s_addr : i_hdr->ip_dst;
+                 */
+                uint32_t nexthop_ip = i_hdr->ip_dst;
                 entry = sr_arpcache_lookup (cache, nexthop_ip);
                 if (entry)
                 {
@@ -150,7 +153,8 @@ sr_arpcache_handle_arpreq (struct sr_instance *sr, struct sr_arpreq *req)
                 }
                 else
                 {
-                    // no infinite loop guaranteed,, by setting icmp_type = 3
+                    /* no infinite loop guaranteed,, by setting icmp_type = 3
+                     */
                     struct sr_arpreq *arpreq = sr_arpcache_queuereq (
                         cache, nexthop_ip, buf, len, rtentry->interface);
                     sr_arpcache_handle_arpreq (sr, arpreq);

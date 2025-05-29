@@ -112,8 +112,6 @@ void
 sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                  unsigned int len, char *interface /* lent */)
 {
-    // todo??:
-
     /* REQUIRES */
     assert (sr);
     assert (packet);
@@ -221,9 +219,8 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                        existing buffer */
                     i_hdr0->ip_ttl = INIT_TTL;
                     ipaddr = i_hdr0->ip_src;
-                    i_hdr0->ip_src
-                        = i_hdr0
-                              ->ip_dst; // for reply, use src as dst of request
+                    i_hdr0->ip_src = i_hdr0->ip_dst; /* for reply, use src as
+                                                        dst of request */
                     i_hdr0->ip_dst = ipaddr;
                     i_hdr0->ip_sum = 0;
                     i_hdr0->ip_sum = cksum (i_hdr0, sizeof (struct sr_ip_hdr));
@@ -311,8 +308,9 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                                            + sizeof (struct sr_icmp_t3_hdr));
                     i_hdr->ip_ttl = INIT_TTL;
                     i_hdr->ip_p = ip_protocol_icmp;
-                    i_hdr->ip_src = ifc->ip; // for making new packet,, use src
-                                             // as ip of outgoing interface
+                    /* for making new packet,, use src as ip of outgoing
+                       interface */
+                    i_hdr->ip_src = ifc->ip;
                     i_hdr->ip_dst = i_hdr0->ip_src;
                     i_hdr->ip_sum = 0;
                     i_hdr->ip_sum = cksum (i_hdr, sizeof (struct sr_ip_hdr));
@@ -327,9 +325,12 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                     e_hdr->ether_type = htons (ethertype_ip);
                     memcpy (e_hdr->ether_shost, ifc->addr, ETHER_ADDR_LEN);
 
-                    uint32_t nexthop_ip = rtentry->gw.s_addr
+                    /* uint32_t nexthop_ip = rtentry->gw.s_addr
                                               ? rtentry->gw.s_addr
                                               : i_hdr->ip_dst;
+                                               */
+                    /* end host doesn't support ARP forward,,  */
+                    uint32_t nexthop_ip = i_hdr->ip_dst;
 
                     arpentry = sr_arpcache_lookup (&(sr->cache), nexthop_ip);
                     if (arpentry)
@@ -427,9 +428,11 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                     e_hdr->ether_type = htons (ethertype_ip);
                     memcpy (e_hdr->ether_shost, ifc->addr, ETHER_ADDR_LEN);
 
-                    uint32_t nexthop_ip = rtentry->gw.s_addr
+                    /* uint32_t nexthop_ip = rtentry->gw.s_addr
                                               ? rtentry->gw.s_addr
-                                              : i_hdr->ip_dst;
+                                              : i_hdr->ip_dst; */
+
+                    uint32_t nexthop_ip = i_hdr->ip_dst;
 
                     arpentry = sr_arpcache_lookup (&(sr->cache), nexthop_ip);
                     if (arpentry)
@@ -467,9 +470,11 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
 
                     memcpy (e_hdr0->ether_shost, ifc->addr, ETHER_ADDR_LEN);
 
-                    uint32_t nexthop_ip = rtentry->gw.s_addr
+                    /* uint32_t nexthop_ip = rtentry->gw.s_addr
                                               ? rtentry->gw.s_addr
-                                              : i_hdr0->ip_dst;
+                                              : i_hdr->ip_dst; */
+
+                    uint32_t nexthop_ip = i_hdr->ip_dst;
 
                     arpentry = sr_arpcache_lookup (&(sr->cache), nexthop_ip);
                     if (arpentry)
