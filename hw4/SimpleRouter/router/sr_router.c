@@ -472,9 +472,9 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
 
                     /* uint32_t nexthop_ip = rtentry->gw.s_addr
                                               ? rtentry->gw.s_addr
-                                              : i_hdr->ip_dst; */
+                                              : i_hdr0->ip_dst; */
 
-                    uint32_t nexthop_ip = i_hdr->ip_dst;
+                    uint32_t nexthop_ip = i_hdr0->ip_dst;
 
                     arpentry = sr_arpcache_lookup (&(sr->cache), nexthop_ip);
                     if (arpentry)
@@ -553,8 +553,10 @@ sr_handlepacket (struct sr_instance *sr, uint8_t *packet /* lent */,
                 e_hdr->ether_type = htons (ethertype_ip);
                 memcpy (e_hdr->ether_shost, ifc->addr, ETHER_ADDR_LEN);
 
-                uint32_t nexthop_ip
+                /* uint32_t nexthop_ip
                     = rtentry->gw.s_addr ? rtentry->gw.s_addr : i_hdr->ip_dst;
+                 */
+                uint32_t nexthop_ip = i_hdr->ip_dst;
                 arpentry = sr_arpcache_lookup (&(sr->cache), nexthop_ip);
 
                 if (arpentry)
