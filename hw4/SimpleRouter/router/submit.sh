@@ -3,7 +3,7 @@
 ID=202118641
 NAME=HadongLee
 DIRNAME="${ID}_${NAME}_assign4"
-TARNAME="${ID}_assign4.tar.gz"
+TARNAME="${ID}_${NAME}_assign4.tar.gz"
 
 # 1. 폴더 생성
 mkdir -p "$DIRNAME"
